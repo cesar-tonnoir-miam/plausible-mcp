@@ -1,7 +1,8 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { PlausibleClient } from "../plausible.js";
 import { reportToolError, UserFacingError } from "../errors.js";
+import { recordMcpClientInfo } from "../mcp-telemetry.js";
 import {
   siteIdSchemaFor,
   dateRangeSchema,
@@ -41,7 +42,7 @@ export function register(
         "Get traffic and conversion metrics over time for a site or specific page. Use to spot trends and changes around deploys.",
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
       outputSchema: queryResultOutputSchema,
-      inputSchema: {
+      inputSchema: z.object({
         site_id: siteIdSchemaFor(defaultSiteId),
         date_range: dateRangeSchema,
         granularity: z
@@ -51,9 +52,10 @@ export function register(
         page: pageSchema,
         metrics: metricsSchema,
         goal: goalSchema,
-      },
+      }),
     },
-    async (args) => {
+    async (args, ctx) => {
+      recordMcpClientInfo(ctx);
       try {
         const siteId = resolveSiteId(args.site_id, defaultSiteId);
         const metrics = args.metrics ?? DEFAULT_METRICS;

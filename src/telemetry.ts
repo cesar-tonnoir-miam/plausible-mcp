@@ -35,16 +35,17 @@ export interface TrackedRoute {
 }
 
 /**
- * Fraction of MCP handshake/keepalive noise (`ping`, `tools/list`, healthcheck
- * `initialize`) to keep as spans. We drop the rest: at 100% protocol ceremony was
- * ~90% of all spans. Keeping a thin sample preserves a heartbeat in Trace Explorer
- * without the flood. Metrics (see recordResponseMetric in worker.ts) still count
- * 100% of these requests, so uptime/volume dashboards are unaffected.
+ * Fraction of MCP handshake/keepalive noise (`server/discover`, `ping`, `tools/list`,
+ * healthcheck `initialize`) to keep as spans. We drop the rest: at 100% protocol
+ * ceremony was ~90% of all spans. Keeping a thin sample preserves a heartbeat in Trace
+ * Explorer without the flood. Metrics (see recordResponseMetric in worker.ts) still
+ * count 100% of these requests, so uptime/volume dashboards are unaffected.
  */
 export const HEARTBEAT_SPAN_KEEP_RATE = 0.01;
 
 const KNOWN_MCP_METHODS = new Set([
   "initialize",
+  "server/discover",
   "ping",
   "tools/list",
   "tools/call",
@@ -60,11 +61,27 @@ const KNOWN_MCP_METHODS = new Set([
   "roots/list",
   "sampling/createMessage",
   "elicitation/create",
+  "subscriptions/listen",
   "notifications/initialized",
   "notifications/cancelled",
   "notifications/progress",
   "notifications/roots/list_changed",
 ]);
+
+/** Normalize a protocol method from an MCP HTTP header or JSON-RPC request. */
+export function classifyMcpMethod(rawMethod: string): McpRequestTelemetry {
+  const method = KNOWN_MCP_METHODS.has(rawMethod) ? rawMethod : "other";
+
+  if (method === "ping" || method === "server/discover") {
+    return { method, kind: "heartbeat" };
+  }
+  if (method === "tools/call") return { method, kind: "tool_call" };
+
+  return {
+    method,
+    kind: method === "other" ? "unknown" : "control",
+  };
+}
 
 /**
  * Extract only bounded protocol metadata from an already-parsed JSON-RPC body.
@@ -79,12 +96,9 @@ export function classifyMcpRequest(payload: unknown): McpRequestTelemetry {
   const message = payload as Record<string, unknown>;
   const rawMethod = typeof message.method === "string" ? message.method : "";
   if (!rawMethod) return { method: "unknown", kind: "unknown" };
-  const method = KNOWN_MCP_METHODS.has(rawMethod) ? rawMethod : "other";
+  const classified = classifyMcpMethod(rawMethod);
 
-  if (method === "ping") return { method, kind: "heartbeat" };
-  if (method === "tools/call") return { method, kind: "tool_call" };
-
-  if (method === "initialize") {
+  if (classified.method === "initialize") {
     const params = message.params;
     const clientInfo =
       params && typeof params === "object"
@@ -95,14 +109,11 @@ export function classifyMcpRequest(payload: unknown): McpRequestTelemetry {
         ? (clientInfo as Record<string, unknown>).name
         : undefined;
     if (clientName === "healthcheck") {
-      return { method, kind: "heartbeat" };
+      return { method: classified.method, kind: "heartbeat" };
     }
   }
 
-  return {
-    method,
-    kind: method === "other" ? "unknown" : "control",
-  };
+  return classified;
 }
 
 /**
@@ -295,7 +306,7 @@ export function traceSampleValue(event: TransactionLike): number | null {
  * Kept: every real tool call, and every error (errors are separate events that
  * never reach beforeSendTransaction). Dropped: untracked scanner routes entirely,
  * all handshake-only notifications, and all but HEARTBEAT_SPAN_KEEP_RATE of
- * `ping`, `tools/list`, and healthcheck-`initialize` noise.
+ * `server/discover`, `ping`, `tools/list`, and healthcheck-`initialize` noise.
  */
 export function transactionDropReason(
   event: TransactionLike,
@@ -320,6 +331,7 @@ export function transactionDropReason(
     }
 
     if (rand >= HEARTBEAT_SPAN_KEEP_RATE) {
+      if (method === "server/discover") return "server/discover";
       if (method === "ping") return "ping";
       if (method === "tools/list") return "tools/list";
       if (

@@ -55,6 +55,64 @@ describe("anonymizeEventWithoutEmail (BYOK privacy guardrail)", () => {
     expect(event.request?.data).toBe(data);
   });
 
+  it("redacts bearer and Access credentials on anonymous and authenticated events", () => {
+    const anonymous: RedactableEvent = {
+      request: {
+        headers: {
+          authorization: "Bearer plausible-key",
+          "content-type": "application/json",
+        },
+      },
+    };
+    const authenticated: RedactableEvent = {
+      user: { email: "user@sentry.io" },
+      request: {
+        headers: {
+          "Cf-Access-Jwt-Assertion": "signed-access-jwt",
+          Cookie: "CF_Authorization=access-cookie",
+        },
+      },
+    };
+
+    anonymizeEventWithoutEmail(anonymous);
+    anonymizeEventWithoutEmail(authenticated);
+
+    expect(anonymous.request?.headers).toEqual({
+      authorization: "[Filtered]",
+      "content-type": "application/json",
+    });
+    expect(authenticated.request?.headers).toEqual({
+      "Cf-Access-Jwt-Assertion": "[Filtered]",
+      Cookie: "[Filtered]",
+    });
+  });
+
+  it("removes caller-controlled MCP client identity only from anonymous spans", () => {
+    const anonymous: RedactableEvent = {
+      contexts: {
+        trace: {
+          data: {
+            "mcp.client.name": "user@example.com",
+            "mcp.client.version": "personal-machine",
+            "mcp.method.name": "tools/call",
+          },
+        },
+      },
+    };
+    const authenticated: RedactableEvent = {
+      user: { email: "user@sentry.io" },
+      spans: [{ data: { "mcp.client.name": "claude" } }],
+    };
+
+    anonymizeEventWithoutEmail(anonymous);
+    anonymizeEventWithoutEmail(authenticated);
+
+    expect(anonymous.contexts?.trace?.data).toEqual({
+      "mcp.method.name": "tools/call",
+    });
+    expect(authenticated.spans?.[0].data?.["mcp.client.name"]).toBe("claude");
+  });
+
   it("treats an empty-string email as anonymous", () => {
     const event: RedactableEvent = { user: { email: "", ip_address: "1.2.3.4" } };
     anonymizeEventWithoutEmail(event);

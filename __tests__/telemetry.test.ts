@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  classifyMcpMethod,
   classifyMcpRequest,
   classifyRoute,
   resolveClientFamily,
@@ -40,6 +41,8 @@ describe("classifyRoute", () => {
 
 describe("classifyMcpRequest", () => {
   it("classifies heartbeat, tool, and control requests", () => {
+    expect(classifyMcpRequest({ jsonrpc: "2.0", id: 1, method: "server/discover" }))
+      .toEqual({ method: "server/discover", kind: "heartbeat" });
     expect(classifyMcpRequest({ jsonrpc: "2.0", id: 123, method: "ping" }))
       .toEqual({ method: "ping", kind: "heartbeat" });
     expect(classifyMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/call" }))
@@ -53,6 +56,8 @@ describe("classifyMcpRequest", () => {
         method: "notifications/roots/list_changed",
         kind: "control",
       });
+    expect(classifyMcpRequest({ jsonrpc: "2.0", id: 2, method: "subscriptions/listen" }))
+      .toEqual({ method: "subscriptions/listen", kind: "control" });
   });
 
   it("recognizes only the exact healthcheck initialize client", () => {
@@ -75,6 +80,19 @@ describe("classifyMcpRequest", () => {
       .toEqual({ method: "unknown", kind: "unknown" });
     expect(classifyMcpRequest([{ method: "ping" }]))
       .toEqual({ method: "batch", kind: "control" });
+  });
+});
+
+describe("classifyMcpMethod", () => {
+  it("classifies modern Mcp-Method header values without reading a request body", () => {
+    expect(classifyMcpMethod("server/discover"))
+      .toEqual({ method: "server/discover", kind: "heartbeat" });
+    expect(classifyMcpMethod("tools/call"))
+      .toEqual({ method: "tools/call", kind: "tool_call" });
+    expect(classifyMcpMethod("subscriptions/listen"))
+      .toEqual({ method: "subscriptions/listen", kind: "control" });
+    expect(classifyMcpMethod("caller-controlled"))
+      .toEqual({ method: "other", kind: "unknown" });
   });
 });
 
@@ -223,6 +241,14 @@ describe("transactionDropReason", () => {
     expect(transactionDropReason(event, HEARTBEAT_SPAN_KEEP_RATE)).toBe("ping");
     expect(transactionDropReason(event, 0.9)).toBe("ping");
     // Inside the kept fraction -> retained as a heartbeat sample.
+    expect(transactionDropReason(event, 0)).toBeNull();
+  });
+
+  it("samples modern server discovery down to the heartbeat keep-rate", () => {
+    const event = mcpTx("server/discover");
+    expect(transactionDropReason(event, HEARTBEAT_SPAN_KEEP_RATE))
+      .toBe("server/discover");
+    expect(transactionDropReason(event, 0.9)).toBe("server/discover");
     expect(transactionDropReason(event, 0)).toBeNull();
   });
 

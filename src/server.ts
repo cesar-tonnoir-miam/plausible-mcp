@@ -1,5 +1,5 @@
 import * as Sentry from "@sentry/cloudflare";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { PlausibleClient } from "./plausible.js";
 import { register as registerTimeseries } from "./tools/get-timeseries.js";
 import { register as registerBreakdown } from "./tools/get-breakdown.js";
@@ -27,10 +27,10 @@ export interface ServerConfig {
 }
 
 /**
- * Usage guidance surfaced to MCP clients in the `initialize` response and injected into the
+ * Usage guidance surfaced to MCP clients during discovery/initialization and injected into the
  * model's context. It documents the Stats API v2 constraints that clients most often get wrong
- * (date formats, future dates, illegal metric/dimension combinations) to cut the resulting
- * 400s at the source.
+ * (date formats, future dates, illegal metric/dimension combinations) to cut the resulting 400s
+ * at the source.
  */
 const SERVER_INSTRUCTIONS = `This server queries Plausible Analytics (Stats API v2) for a site's traffic and conversions. All tools are read-only.
 
@@ -64,6 +64,10 @@ export function createServer(config: ServerConfig): McpServer {
         instructions: config.enableFeedbackTool
           ? SERVER_INSTRUCTIONS + FEEDBACK_INSTRUCTIONS
           : SERVER_INSTRUCTIONS,
+        cacheHints: {
+          "server/discover": { ttlMs: 60 * 60 * 1000, cacheScope: "public" },
+          "tools/list": { ttlMs: 60 * 60 * 1000, cacheScope: "public" },
+        },
       },
     ),
     {

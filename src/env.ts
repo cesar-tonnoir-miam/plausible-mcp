@@ -35,6 +35,11 @@ export interface Env {
    */
   ALLOWED_EMAIL_DOMAIN?: string;
 
+  /** Comma-separated hostname allowlist for MCP Host-header validation. */
+  MCP_ALLOWED_HOSTNAMES: string;
+  /** Browser Origin hostnames allowed to call the Access-authenticated /internal endpoint. */
+  MCP_ALLOWED_ORIGIN_HOSTNAMES?: string;
+
   // Cloudflare bindings
   RATE_LIMITER?: RateLimiter;
 

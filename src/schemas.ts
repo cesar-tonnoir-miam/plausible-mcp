@@ -124,7 +124,7 @@ export function buildGoalFilter(goal: string): unknown[] {
 }
 
 /**
- * Shared `outputSchema` (a ZodRawShape) for the query-style tools. Declaring it makes the
+ * Shared `outputSchema` for the query-style tools. Declaring it makes the
  * tools return machine-readable `structuredContent` (validated by the MCP SDK) alongside the
  * human-readable text block. `metrics`/`dimensions` label the parallel arrays in each row so
  * consumers know what each number means without re-deriving it from the request.
@@ -132,7 +132,7 @@ export function buildGoalFilter(goal: string): unknown[] {
  * Value types are kept permissive (`number | string | null`) so an unexpected Plausible value
  * can't trip the SDK's output validation and turn a successful query into a tool error.
  */
-export const queryResultOutputSchema = {
+export const queryResultOutputSchema = z.object({
   metrics: z
     .array(z.string())
     .describe("Metric keys, in the order they appear in each row's `metrics` array"),
@@ -147,7 +147,7 @@ export const queryResultOutputSchema = {
       })
     )
     .describe("One row per dimension-value combination returned by Plausible"),
-};
+});
 
 /**
  * Normalize a raw Plausible response into the `structuredContent` shape described by

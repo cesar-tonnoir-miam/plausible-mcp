@@ -1,6 +1,7 @@
 import { z } from "zod";
 import * as Sentry from "@sentry/cloudflare";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
+import { recordMcpClientInfo } from "../mcp-telemetry.js";
 
 export const FEEDBACK_CATEGORIES = [
   "bug",
@@ -30,11 +31,11 @@ export function register(server: McpServer) {
       description:
         "Report feedback about this MCP server to its maintainers: a confusing error, a query you could not express, results that did not match expectations, or something that worked well. Use this after hitting friction with the other tools so the server can improve.",
       annotations: { readOnlyHint: false, idempotentHint: false, openWorldHint: true },
-      outputSchema: {
+      outputSchema: z.object({
         recorded: z.boolean(),
         feedback_id: z.string().optional(),
-      },
-      inputSchema: {
+      }),
+      inputSchema: z.object({
         message: z
           .string()
           .min(10)
@@ -51,9 +52,10 @@ export function register(server: McpServer) {
           .max(64)
           .optional()
           .describe("Which tool the feedback is about, if any (e.g. get_breakdown)"),
-      },
+      }),
     },
-    async (args) => {
+    async (args, ctx) => {
+      recordMcpClientInfo(ctx);
       const feedbackId = Sentry.withScope((scope) => {
         scope.setTag("feedback.category", args.category ?? "bug");
         if (args.tool_name) {

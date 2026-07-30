@@ -40,7 +40,7 @@ volume never enters dashboards. All attributes are low-cardinality:
 | `http.response.status_code` | Final status | `200`, `401`, `429` |
 | `app.response.status_class` | Status bucket | `2xx`, `4xx`, `5xx` |
 | `app.client.family` | Bucketed client (see below) | `claude-code`, `cursor`, `codex`, `mcp-remote`, `claude`, `openai`, `python`, `node`, `go`, `java`, `other`, `unknown` |
-| `mcp.method.name` | Protocol method from a fixed allow-list | `ping`, `initialize`, `tools/call`, `other`, `unknown` |
+| `mcp.method.name` | Protocol method from a fixed allow-list | `server/discover`, `initialize`, `tools/call`, `other`, `unknown` |
 | `app.mcp.request.kind` | Bounded request classification | `heartbeat`, `tool_call`, `control`, `unknown` |
 
 ### Metric: `mcp.tool.error` (counter, one per failed tool call)
@@ -62,23 +62,25 @@ failures and Plausible 4xx responses remain visible through this metric only.
 
 `http.route`, `app.route.group`, `app.client.family`, `mcp.method.name`, and
 `app.mcp.request.kind` — so real tool-call traces are groupable by a bounded client family
-instead of the initialize-only `mcp.client.name`, while HTTP roots can be sampled together
-with their separately-exported MCP child transactions. The Worker parses only small JSON
-request clones and retains no request ids, params, tool arguments, or unknown method names.
+instead of the caller-controlled `mcp.client.name`, while HTTP roots can be sampled together
+with their separately-exported MCP child transactions. Modern requests are classified from
+the `Mcp-Method` header; legacy requests fall back to small JSON request clones. Neither path
+retains request ids, params, tool arguments, or unknown method names.
 
 ### Client family
 
 `resolveClientFamily(User-Agent)` buckets into the fixed set above. We use the
-User-Agent, not the MCP `clientInfo.name`, because the latter (a) only rides the
-`initialize` message — every follow-up ping/tool call on this stateless per-request
-server would otherwise be `(no value)` — and (b) is a free-form string a monitor or
-scanner controls (`healthcheck`, `openclaw-bundle-mcp`). The raw `mcp.client.name` is
-still on `initialize` spans for per-trace deep dives; it's just not a dashboard dimension.
+User-Agent, not the MCP `clientInfo.name`, because the latter is a free-form string a
+monitor or scanner controls (`healthcheck`, `openclaw-bundle-mcp`). In the legacy era it
+only rides `initialize`; in the modern era it rides every request and is copied from the
+request envelope onto attributed `/internal` tool spans for per-trace deep dives. Anonymous
+BYOK events strip it along with other caller-controlled identity. It remains a secondary
+debugging attribute, never a dashboard dimension.
 
 ## Span noise dropped before send (`beforeSendTransaction`)
 
 - **Untracked routes** (`/.env`, `/wp-admin/*`, `/`, `favicon.ico`, …): dropped entirely.
-- **`ping`, `tools/list`, and healthcheck `initialize`**: sampled to
+- **`server/discover`, `ping`, `tools/list`, and healthcheck `initialize`**: sampled to
   `HEARTBEAT_SPAN_KEEP_RATE` (1%) — a thin heartbeat in Trace Explorer without the flood.
   Sampling is deterministic from the trace id, so the outer HTTP root and MCP child are
   kept or dropped together rather than producing empty roots or orphan children.
@@ -99,7 +101,8 @@ still on `initialize` spans for per-trace deep dives; it's just not a dashboard 
 `/mcp` (BYOK) stays anonymous: `beforeSend` strips both the ingest-inferred IP and any
 JSON-RPC request body from events without an email (`src/redaction.ts`),
 `beforeSendTransaction` applies the same identity guardrail, and `beforeSendSpan` filters
-`Authorization`/`Cookie`/`Cf-Access-Jwt-Assertion` span data. Only `/internal` attaches
+`Authorization`/`Cookie`/`Cf-Access-Jwt-Assertion` from event request headers and span data.
+Only `/internal` attaches
 `Sentry.setUser({ email })` and records tool I/O. The `app.client.family` attribute is a
 bounded bucket, not PII.
 

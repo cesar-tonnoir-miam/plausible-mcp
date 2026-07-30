@@ -1,7 +1,8 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { PlausibleClient } from "../plausible.js";
 import { reportToolError } from "../errors.js";
+import { recordMcpClientInfo } from "../mcp-telemetry.js";
 import {
   siteIdSchemaFor,
   dateRangeSchema,
@@ -27,7 +28,7 @@ export function register(
         "Get goal conversion rates and counts. Can break down by page to see which pages drive conversions.",
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
       outputSchema: queryResultOutputSchema,
-      inputSchema: {
+      inputSchema: z.object({
         site_id: siteIdSchemaFor(defaultSiteId),
         date_range: dateRangeSchema,
         goal: goalSchema,
@@ -37,9 +38,10 @@ export function register(
           .default(false)
           .describe("If true, shows conversion rate per page")
           .optional(),
-      },
+      }),
     },
-    async (args) => {
+    async (args, ctx) => {
+      recordMcpClientInfo(ctx);
       try {
         const siteId = resolveSiteId(args.site_id, defaultSiteId);
         const metrics = ["visitors", "events", "conversion_rate"];

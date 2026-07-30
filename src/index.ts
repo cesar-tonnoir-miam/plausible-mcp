@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { createServer } from "./server.js";
 
 const apiKey = process.env.PLAUSIBLE_API_KEY;
@@ -12,12 +12,15 @@ if (!apiKey) {
   process.exit(1);
 }
 
-const server = createServer({
-  apiKey,
-  baseUrl: process.env.PLAUSIBLE_BASE_URL,
-  defaultSiteId: process.env.PLAUSIBLE_DEFAULT_SITE_ID,
-});
-
-const transport = new StdioServerTransport();
-await server.connect(transport);
+serveStdio(
+  () =>
+    createServer({
+      apiKey,
+      baseUrl: process.env.PLAUSIBLE_BASE_URL,
+      defaultSiteId: process.env.PLAUSIBLE_DEFAULT_SITE_ID,
+    }),
+  {
+    onerror: (error) => console.error("plausible-mcp stdio error:", error),
+  },
+);
 console.error("plausible-mcp server running on stdio");
