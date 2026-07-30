@@ -35,11 +35,11 @@ export interface TrackedRoute {
 }
 
 /**
- * Fraction of MCP handshake/keepalive noise (`ping`, healthcheck `initialize`) to
- * keep as spans. We drop the rest: at 100% they were ~90% of all spans. Keeping a
- * thin sample preserves a heartbeat in Trace Explorer without the flood. Metrics
- * (see recordResponseMetric in worker.ts) still count 100% of these requests, so
- * uptime/volume dashboards are unaffected by this span sampling.
+ * Fraction of MCP handshake/keepalive noise (`ping`, `tools/list`, healthcheck
+ * `initialize`) to keep as spans. We drop the rest: at 100% protocol ceremony was
+ * ~90% of all spans. Keeping a thin sample preserves a heartbeat in Trace Explorer
+ * without the flood. Metrics (see recordResponseMetric in worker.ts) still count
+ * 100% of these requests, so uptime/volume dashboards are unaffected.
  */
 export const HEARTBEAT_SPAN_KEEP_RATE = 0.01;
 
@@ -261,7 +261,7 @@ function transactionPathname(event: TransactionLike): string | null {
   return null;
 }
 
-/** The span carrying MCP method metadata (HTTP root, MCP root, or child), if any. */
+/** The span carrying MCP method metadata (HTTP root, MCP request, or notification), if any. */
 function mcpSpanData(event: TransactionLike): Record<string, unknown> | null {
   const trace = event.contexts?.trace;
   if (
@@ -271,7 +271,7 @@ function mcpSpanData(event: TransactionLike): Record<string, unknown> | null {
     return trace.data;
   }
   for (const span of event.spans ?? []) {
-    if (span.op === "mcp.server" && span.data) return span.data;
+    if (span.data && "mcp.method.name" in span.data) return span.data;
   }
   return null;
 }
@@ -294,7 +294,8 @@ export function traceSampleValue(event: TransactionLike): number | null {
  *
  * Kept: every real tool call, and every error (errors are separate events that
  * never reach beforeSendTransaction). Dropped: untracked scanner routes entirely,
- * and all but HEARTBEAT_SPAN_KEEP_RATE of `ping` / healthcheck-`initialize` noise.
+ * all handshake-only notifications, and all but HEARTBEAT_SPAN_KEEP_RATE of
+ * `ping`, `tools/list`, and healthcheck-`initialize` noise.
  */
 export function transactionDropReason(
   event: TransactionLike,
@@ -310,8 +311,17 @@ export function transactionDropReason(
     const method = data["mcp.method.name"];
     const client = data["mcp.client.name"];
     const requestKind = data["app.mcp.request.kind"];
+
+    if (method === "notifications/initialized") {
+      return "notifications/initialized";
+    }
+    if (method === "notifications/roots/list_changed") {
+      return "notifications/roots/list_changed";
+    }
+
     if (rand >= HEARTBEAT_SPAN_KEEP_RATE) {
       if (method === "ping") return "ping";
+      if (method === "tools/list") return "tools/list";
       if (
         method === "initialize" &&
         (client === "healthcheck" || requestKind === "heartbeat")

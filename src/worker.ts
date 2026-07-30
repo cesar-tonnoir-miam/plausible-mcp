@@ -66,6 +66,16 @@ function sentryConfig(env: Env): Sentry.CloudflareOptions {
     // reading volume off 100%-sampled spans. This is what lets beforeSendTransaction
     // drop scanner/keepalive spans below without losing uptime/volume dashboards.
     enableMetrics: true,
+    // Drop the auto-instrumented rate limiter span. @sentry/cloudflare wraps any binding
+    // exposing `limit()` and times the call, but records no outcome — the span for an
+    // allowed request is identical to one that was throttled, so it carries no signal
+    // while running on every request. Matched on the origin attribute rather than the
+    // span name, which embeds the binding name. 429s stay visible via the
+    // app.server.response metric. beforeSendSpan cannot do this: returning null there
+    // only logs a warning and keeps the span.
+    ignoreSpans: [
+      { attributes: { "sentry.origin": "auto.faas.cloudflare.rate_limit" } },
+    ],
     // BYOK (`/mcp`) privacy guardrail: only `/internal` sets an identity via Sentry.setUser.
     // Strip the ingest-inferred client IP from every other (anonymous) event so BYOK traffic
     // carries tool names and failures, never who made them. See ./redaction.ts.
@@ -77,9 +87,10 @@ function sentryConfig(env: Env): Sentry.CloudflareOptions {
     beforeSendTransaction(event) {
       anonymizeEventWithoutEmail(event);
       // Drop transaction spans that are pure noise: internet scanners hitting
-      // untracked routes, and all but a thin sample of MCP handshake/keepalive
-      // (`ping`, healthcheck `initialize`). Volume/health still counts 100% via
-      // metrics; errors are separate events and are never dropped here.
+      // untracked routes, handshake-only notifications, and all but a thin sample
+      // of MCP handshake/keepalive (`ping`, `tools/list`, healthcheck `initialize`).
+      // Volume/health still counts 100% via metrics; errors are separate events and
+      // are never dropped here.
       const sampleValue = traceSampleValue(event) ?? Math.random();
       if (transactionDropReason(event, sampleValue)) return null;
       return event;

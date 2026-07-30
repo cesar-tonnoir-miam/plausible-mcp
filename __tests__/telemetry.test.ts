@@ -46,6 +46,13 @@ describe("classifyMcpRequest", () => {
       .toEqual({ method: "tools/call", kind: "tool_call" });
     expect(classifyMcpRequest({ jsonrpc: "2.0", id: 1, method: "tools/list" }))
       .toEqual({ method: "tools/list", kind: "control" });
+    expect(classifyMcpRequest({ method: "notifications/initialized" }))
+      .toEqual({ method: "notifications/initialized", kind: "control" });
+    expect(classifyMcpRequest({ method: "notifications/roots/list_changed" }))
+      .toEqual({
+        method: "notifications/roots/list_changed",
+        kind: "control",
+      });
   });
 
   it("recognizes only the exact healthcheck initialize client", () => {
@@ -219,6 +226,25 @@ describe("transactionDropReason", () => {
     expect(transactionDropReason(event, 0)).toBeNull();
   });
 
+  it("samples tools/list down to the heartbeat keep-rate", () => {
+    const event = mcpTx("tools/list");
+    expect(transactionDropReason(event, HEARTBEAT_SPAN_KEEP_RATE))
+      .toBe("tools/list");
+    expect(transactionDropReason(event, 0.9)).toBe("tools/list");
+    expect(transactionDropReason(event, 0)).toBeNull();
+  });
+
+  it("drops handshake-only notifications regardless of the sampling roll", () => {
+    for (const method of [
+      "notifications/initialized",
+      "notifications/roots/list_changed",
+    ]) {
+      const event = mcpTx(method);
+      expect(transactionDropReason(event, 0)).toBe(method);
+      expect(transactionDropReason(event, 0.999)).toBe(method);
+    }
+  });
+
   it("samples the healthcheck monitor's initialize, but keeps real initialize", () => {
     const health = mcpTx("initialize", "healthcheck");
     expect(transactionDropReason(health, 0.5)).toBe("healthcheck-initialize");
@@ -248,6 +274,21 @@ describe("transactionDropReason", () => {
       },
     };
     expect(transactionDropReason(event, 0.9)).toBe("ping");
+  });
+
+  it("reads mcp attributes off a notification child span", () => {
+    const event: TransactionLike = {
+      transaction: "POST /mcp",
+      request: { url: "https://plausible-mcp.sentry.dev/mcp" },
+      contexts: { trace: { op: "http.server" } },
+      spans: [{
+        op: "mcp.notification.client_to_server",
+        description: "notifications/initialized",
+        data: { "mcp.method.name": "notifications/initialized" },
+      }],
+    };
+
+    expect(transactionDropReason(event, 0)).toBe("notifications/initialized");
   });
 
   it("samples an HTTP root from its stamped MCP classification", () => {

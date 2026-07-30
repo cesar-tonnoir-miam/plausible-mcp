@@ -78,11 +78,16 @@ still on `initialize` spans for per-trace deep dives; it's just not a dashboard 
 ## Span noise dropped before send (`beforeSendTransaction`)
 
 - **Untracked routes** (`/.env`, `/wp-admin/*`, `/`, `favicon.ico`, …): dropped entirely.
-- **`ping` and healthcheck `initialize`**: sampled to `HEARTBEAT_SPAN_KEEP_RATE` (1%) —
-  a thin heartbeat in Trace Explorer without the flood. Sampling is deterministic from the
-  trace id, so the outer HTTP root and separately-exported MCP child are kept or dropped
-  together rather than producing empty roots or orphan children. The `app.server.response`
-  metric still counts 100% of them, so uptime/volume is unaffected.
+- **`ping`, `tools/list`, and healthcheck `initialize`**: sampled to
+  `HEARTBEAT_SPAN_KEEP_RATE` (1%) — a thin heartbeat in Trace Explorer without the flood.
+  Sampling is deterministic from the trace id, so the outer HTTP root and MCP child are
+  kept or dropped together rather than producing empty roots or orphan children.
+- **`notifications/initialized` and `notifications/roots/list_changed`**: dropped entirely.
+  These are handshake bookkeeping and a roots capability notification the server does not
+  implement, so neither has per-request debugging value.
+- **Metrics remain complete**: the `app.server.response` metric counts 100% of sampled and
+  dropped protocol requests, including `mcp.method.name` and `app.mcp.request.kind`, so
+  uptime, volume, and method dashboards are unaffected.
 - **Errors are separate events** routed through `beforeSend`. Two expected MCP transport
   rejections are dropped as issue noise: the 406 raised when a GET client does not accept
   `text/event-stream`, and the `Parse error` raised when a POST body is not valid JSON-RPC
