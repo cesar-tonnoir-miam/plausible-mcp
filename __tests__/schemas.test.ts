@@ -31,6 +31,10 @@ describe("dimensionSchema", () => {
     expect(dimensionSchema.safeParse("event:props:destination_host").success).toBe(true);
   });
 
+  it("parses a custom property name beginning with whitespace", () => {
+    expect(dimensionSchema.safeParse("event:props: plan").success).toBe(true);
+  });
+
   it("accepts a 300-character custom property name", () => {
     const propertyName = "p".repeat(300);
 

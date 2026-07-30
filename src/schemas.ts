@@ -142,7 +142,11 @@ export function isCustomPropertyDimension(value: string): boolean {
 const customPropertyDimensionSchema = z
   .string()
   .regex(
-    /^event:props:\S/,
+    /^event:props:/,
+    'Custom property dimension must look like "event:props:<name>"'
+  )
+  .min(
+    CUSTOM_PROPERTY_PREFIX.length + 1,
     'Custom property dimension must look like "event:props:<name>"'
   )
   .max(CUSTOM_PROPERTY_PREFIX.length + MAX_CUSTOM_PROPERTY_NAME_LENGTH);
