@@ -1,7 +1,8 @@
 import { z } from "zod";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { PlausibleClient, PlausibleResponse } from "../plausible.js";
 import { reportToolError } from "../errors.js";
+import { recordMcpClientInfo } from "../mcp-telemetry.js";
 import {
   siteIdSchemaFor,
   dateRangeSchema,
@@ -14,8 +15,6 @@ import {
 } from "../schemas.js";
 import { resolveSiteId } from "./get-timeseries.js";
 
-// A type alias (not an interface) so it satisfies the SDK's `structuredContent`
-// index-signature constraint (`{ [x: string]: unknown }`).
 type PeriodComparison = {
   period_a: { range: string; metrics: Record<string, number | null> };
   period_b: { range: string; metrics: Record<string, number | null> };
@@ -31,7 +30,7 @@ const periodSchema = z.object({
 });
 
 /** `outputSchema` for compare_periods — two period aggregates plus per-metric deltas. */
-const comparePeriodsOutputSchema = {
+const comparePeriodsOutputSchema = z.object({
   period_a: periodSchema,
   period_b: periodSchema,
   deltas: z
@@ -40,7 +39,7 @@ const comparePeriodsOutputSchema = {
       z.object({ absolute: nullableNumber, percent: nullableNumber })
     )
     .describe("Per-metric change from period_a to period_b (absolute and percent)"),
-};
+});
 
 function extractAggregateMetrics(
   response: PlausibleResponse,
@@ -91,7 +90,7 @@ export function register(
         "Compare metrics between two date ranges side by side. Ideal for before/after deploy analysis. Returns aggregate values for each period plus the delta (absolute and %).",
       annotations: { readOnlyHint: true, idempotentHint: true, openWorldHint: true },
       outputSchema: comparePeriodsOutputSchema,
-      inputSchema: {
+      inputSchema: z.object({
         site_id: siteIdSchemaFor(defaultSiteId),
         period_a: dateRangeSchema.describe(
           'First date range, e.g. "2024-01-01,2024-01-07" or "7d"'
@@ -102,9 +101,10 @@ export function register(
         page: pageSchema,
         metrics: metricsSchema,
         goal: goalSchema,
-      },
+      }),
     },
-    async (args) => {
+    async (args, ctx) => {
+      recordMcpClientInfo(ctx);
       try {
         const siteId = resolveSiteId(args.site_id, defaultSiteId);
         const metrics = args.metrics ?? DEFAULT_METRICS;

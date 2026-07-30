@@ -13,6 +13,10 @@ routes = [
 # Email domain(s) allowed to sign in to /internal (comma-separated, "@" optional).
 # Enforced in code in ADDITION to the upstream Access policy. Self-hosting? Set your own.
 ALLOWED_EMAIL_DOMAIN = "sentry.io"
+# Hostnames accepted by the MCP endpoints (port-agnostic). Keep localhost for wrangler dev.
+MCP_ALLOWED_HOSTNAMES = "plausible-mcp.sentry.dev,localhost,127.0.0.1"
+# Browser origins allowed to call /internal. Non-browser clients send no Origin header.
+MCP_ALLOWED_ORIGIN_HOSTNAMES = "claude.ai,localhost,127.0.0.1"
 # Cloudflare Access team domain — verifies the Cf-Access-Jwt-Assertion JWKS + issuer.
 # Not a secret (public JWKS URL); must match the team the Access app lives in. No slash.
 CF_ACCESS_TEAM_DOMAIN = "https://getsentry.cloudflareaccess.com"

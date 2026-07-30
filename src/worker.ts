@@ -1,9 +1,16 @@
 import * as Sentry from "@sentry/cloudflare";
-import { createMcpHandler } from "agents/mcp";
+import {
+  createMcpHandler,
+  hostHeaderValidationResponse,
+  isJsonContentType,
+  originValidationResponse,
+  type AuthInfo,
+} from "@modelcontextprotocol/server";
 import { createServer } from "./server.js";
 import { parseAllowedEmailDomains, verifyCloudflareAccessJwt } from "./cf-access.js";
 import { anonymizeEventWithoutEmail } from "./redaction.js";
 import {
+  classifyMcpMethod,
   classifyMcpRequest,
   classifyRoute,
   errorDropReason,
@@ -34,8 +41,8 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type, Authorization, Accept, Mcp-Session-Id",
-  "Access-Control-Expose-Headers": "Mcp-Session-Id",
+    "Content-Type, Authorization, Accept, Mcp-Method, Mcp-Name, MCP-Protocol-Version",
+  "Access-Control-Expose-Headers": "WWW-Authenticate",
 };
 
 function corsResponse(response: Response): Response {
@@ -52,6 +59,101 @@ function jsonError(message: string, status: number): Response {
     { status, headers: { "Content-Type": "application/json" } },
   );
 }
+
+function bearerAuthError(
+  message: string,
+  error: "invalid_request" | "invalid_token",
+): Response {
+  const response = jsonError(message, 401);
+  response.headers.set(
+    "WWW-Authenticate",
+    `Bearer realm="plausible-mcp", error="${error}"`,
+  );
+  return response;
+}
+
+function parseHostnameList(value: string | undefined): string[] {
+  return value
+    ?.split(",")
+    .map((hostname) => hostname.trim())
+    .filter(Boolean) ?? [];
+}
+
+function mcpRequestValidationResponse(
+  request: Request,
+  env: Env,
+  route: TrackedRoute,
+): Response | undefined {
+  const allowedHostnames = parseHostnameList(env.MCP_ALLOWED_HOSTNAMES);
+  if (allowedHostnames.length === 0) {
+    return jsonError("Server misconfigured: missing MCP hostname allowlist.", 500);
+  }
+
+  const hostRejection = hostHeaderValidationResponse(request, allowedHostnames);
+  if (hostRejection) return hostRejection;
+
+  const origin = request.headers.get("Origin");
+  if (!origin) return undefined;
+
+  if (route.group === "internal") {
+    return originValidationResponse(
+      request,
+      parseHostnameList(env.MCP_ALLOWED_ORIGIN_HOSTNAMES),
+    );
+  }
+
+  // BYOK has no ambient credentials: callers must explicitly supply their Plausible key,
+  // so valid browser origins remain intentionally open. The helper still rejects opaque
+  // and malformed Origin values.
+  let originHostname = "";
+  try {
+    originHostname = new URL(origin).hostname;
+  } catch {
+    return originValidationResponse(request, []);
+  }
+  return originValidationResponse(request, originHostname ? [originHostname] : []);
+}
+
+interface RequestServerConfig {
+  apiKey: string;
+  baseUrl?: string;
+  defaultSiteId?: string;
+  recordToolIO: boolean;
+}
+
+function buildAuthInfo(
+  token: string,
+  clientId: string,
+  serverConfig: RequestServerConfig,
+): AuthInfo {
+  return {
+    token,
+    clientId,
+    scopes: ["plausible:read"],
+    extra: {
+      recordMcpClientInfo: serverConfig.recordToolIO,
+      serverConfig,
+    },
+  };
+}
+
+// One handler owns the subscription bus; its factory still creates an isolated server per request.
+const workerMcpHandler = createMcpHandler(
+  ({ authInfo }) => {
+    const serverConfig = authInfo?.extra?.serverConfig as
+      | RequestServerConfig
+      | undefined;
+    if (!serverConfig || typeof serverConfig.apiKey !== "string") {
+      throw new Error("Missing authenticated MCP server configuration.");
+    }
+
+    return createServer({
+      ...serverConfig,
+      enableFeedbackTool: true,
+    });
+  },
+  { legacy: "stateless" },
+);
 
 function sentryConfig(env: Env): Sentry.CloudflareOptions {
   return {
@@ -88,7 +190,8 @@ function sentryConfig(env: Env): Sentry.CloudflareOptions {
       anonymizeEventWithoutEmail(event);
       // Drop transaction spans that are pure noise: internet scanners hitting
       // untracked routes, handshake-only notifications, and all but a thin sample
-      // of MCP handshake/keepalive (`ping`, `tools/list`, healthcheck `initialize`).
+      // of MCP handshake/keepalive (`server/discover`, `ping`, `tools/list`,
+      // healthcheck `initialize`).
       // Volume/health still counts 100% via metrics; errors are separate events and
       // are never dropped here.
       const sampleValue = traceSampleValue(event) ?? Math.random();
@@ -125,9 +228,12 @@ async function inspectMcpRequest(
   request: Request,
 ): Promise<McpRequestTelemetry | null> {
   if (request.method !== "POST") return null;
-  if (!request.headers.get("Content-Type")?.toLowerCase().includes("application/json")) {
+  if (!isJsonContentType(request.headers.get("Content-Type"))) {
     return null;
   }
+
+  const headerMethod = request.headers.get("Mcp-Method");
+  if (headerMethod) return classifyMcpMethod(headerMethod);
 
   const contentLength = Number(request.headers.get("Content-Length"));
   if (
@@ -168,7 +274,6 @@ async function rateLimited(request: Request, env: Env): Promise<Response | null>
 async function handleInternalMcp(
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
 ): Promise<Response> {
   if (!env.CF_ACCESS_TEAM_DOMAIN || !env.CF_ACCESS_AUD) {
     return jsonError("Server misconfigured: missing Cloudflare Access verification config.", 500);
@@ -199,7 +304,7 @@ async function handleInternalMcp(
     return jsonError("Server misconfigured: missing shared Plausible API key.", 500);
   }
 
-  const server = createServer({
+  const authInfo = buildAuthInfo(token, identity.email, {
     apiKey: env.PLAUSIBLE_API_KEY,
     baseUrl: env.PLAUSIBLE_BASE_URL,
     defaultSiteId: env.PLAUSIBLE_DEFAULT_SITE_ID,
@@ -208,13 +313,12 @@ async function handleInternalMcp(
     // SSO-gated and uses a shared server-side key, so per-user I/O gives us
     // attribution/abuse-tracing on the shared quota. Recorded data is analytics query
     // params (site ids, date ranges) and aggregate traffic numbers — not personal PII
-    // — and Authorization/Cookie/JWT headers are still stripped by beforeSendSpan.
+    // — and Authorization/Cookie/JWT headers are still stripped by the Sentry hooks.
     // BYOK (/mcp) deliberately leaves this off: that traffic is a third party's own data.
     recordToolIO: true,
-    enableFeedbackTool: true,
   });
 
-  return createMcpHandler(server, { route: "/internal" })(request, env, ctx);
+  return workerMcpHandler.fetch(request, { authInfo });
 }
 
 /**
@@ -225,7 +329,6 @@ async function handleInternalMcp(
 async function handleDirectMcp(
   request: Request,
   env: Env,
-  ctx: ExecutionContext,
 ): Promise<Response> {
   // Require a well-formed `Bearer <key>` header — a bare token with no scheme is
   // rejected rather than silently accepted, so an accidentally-pasted value fails loudly.
@@ -234,30 +337,28 @@ async function handleDirectMcp(
   const apiKey = match?.[1]?.trim();
 
   if (!apiKey) {
-    return jsonError(
+    return bearerAuthError(
       "Missing or malformed Authorization header. Pass your Plausible API key as `Bearer <key>`.",
-      401,
+      "invalid_request",
     );
   }
 
   if (apiKey.length < 8) {
-    return jsonError("Invalid API key. Key is too short.", 401);
+    return bearerAuthError("Invalid API key. Key is too short.", "invalid_token");
   }
 
-  let server;
   try {
-    server = createServer({
+    const authInfo = buildAuthInfo(apiKey, "plausible-api-key", {
       apiKey,
       baseUrl: env.PLAUSIBLE_BASE_URL,
       defaultSiteId: env.PLAUSIBLE_DEFAULT_SITE_ID,
-      enableFeedbackTool: true,
+      recordToolIO: false,
     });
+    return await workerMcpHandler.fetch(request, { authInfo });
   } catch (error) {
     Sentry.captureException(error);
     return jsonError("Server configuration error.", 500);
   }
-
-  return createMcpHandler(server)(request, env, ctx);
 }
 
 /**
@@ -292,7 +393,7 @@ const handler = {
   async fetch(
     request: Request,
     env: Env,
-    ctx: ExecutionContext,
+    _ctx: ExecutionContext,
   ): Promise<Response> {
     if (request.method === "OPTIONS") {
       return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -303,9 +404,9 @@ const handler = {
     const clientFamily = resolveClientFamily(request.headers.get("User-Agent"));
 
     // Stamp the root request span with a bounded client family + route group so real
-    // tool-call traces are groupable without the initialize-only, caller-controlled
-    // mcp.client.name. Only for tracked routes — scanner-route transactions are
-    // dropped in beforeSendTransaction regardless.
+    // tool-call traces are groupable without relying on caller-controlled
+    // mcp.client.name. Only for tracked routes — scanner-route transactions are dropped
+    // in beforeSendTransaction regardless.
     if (tracked) {
       const span = Sentry.getActiveSpan();
       if (span) {
@@ -315,8 +416,12 @@ const handler = {
       }
     }
 
-    const limited = await rateLimited(request, env);
-    const mcpRequest = limited || !tracked
+    const rejected = tracked
+      ? mcpRequestValidationResponse(request, env, tracked)
+      : undefined;
+    const limited = rejected ? null : await rateLimited(request, env);
+    const earlyResponse = rejected ?? limited;
+    const mcpRequest = earlyResponse || !tracked
       ? null
       : await inspectMcpRequest(request);
 
@@ -329,12 +434,12 @@ const handler = {
     }
 
     let response: Response;
-    if (limited) {
-      response = limited;
+    if (earlyResponse) {
+      response = earlyResponse;
     } else if (pathname === "/internal" || pathname.startsWith("/internal/")) {
-      response = await handleInternalMcp(request, env, ctx);
+      response = await handleInternalMcp(request, env);
     } else if (pathname === "/mcp" || pathname.startsWith("/mcp/")) {
-      response = await handleDirectMcp(request, env, ctx);
+      response = await handleDirectMcp(request, env);
     } else {
       response = jsonError("Not found.", 404);
     }
@@ -345,4 +450,5 @@ const handler = {
   },
 } satisfies ExportedHandler<Env>;
 
+export const workerHandler = { fetch: handler.fetch };
 export default Sentry.withSentry(sentryConfig, handler);

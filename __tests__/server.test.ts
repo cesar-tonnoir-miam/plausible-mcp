@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import {
+  Client,
+  InMemoryTransport,
+  StreamableHTTPClientTransport,
+} from "@modelcontextprotocol/client";
+import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createServer } from "../src/server.js";
 
 // Mock fetch globally for all Plausible API calls
@@ -280,5 +284,79 @@ describe("MCP Server with feedback tool enabled", () => {
     });
 
     expect(result.isError).toBe(true);
+  });
+});
+
+describe("MCP HTTP protocol eras", () => {
+  const handler = createMcpHandler(() => createServer({
+    apiKey: "test-key-123",
+    defaultSiteId: "example.com",
+  }));
+
+  afterAll(async () => {
+    await handler.close();
+  });
+
+  it("serves the 2026-07-28 era through server/discover", async () => {
+    const methods: Array<string | null> = [];
+    const transport = new StreamableHTTPClientTransport(
+      new URL("https://test.local/mcp"),
+      {
+        fetch: (url, init) => {
+          const request = new Request(url, init);
+          methods.push(request.headers.get("Mcp-Method"));
+          return handler.fetch(request);
+        },
+      },
+    );
+    const modernClient = new Client(
+      { name: "modern-test-client", version: "0.0.1" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
+
+    try {
+      await modernClient.connect(transport);
+      expect(modernClient.getProtocolEra()).toBe("modern");
+      expect(methods).toContain("server/discover");
+
+      const discover = modernClient.getDiscoverResult() as unknown as {
+        ttlMs: number;
+        cacheScope: string;
+      };
+      expect(discover.ttlMs).toBe(60 * 60 * 1000);
+      expect(discover.cacheScope).toBe("public");
+
+      const toolList = await modernClient.listTools();
+      expect(methods).toContain("tools/list");
+      expect((toolList as unknown as { ttlMs: number }).ttlMs)
+        .toBe(60 * 60 * 1000);
+      expect((toolList as unknown as { cacheScope: string }).cacheScope)
+        .toBe("public");
+      expect(toolList.tools.map((tool) => tool.name)).toEqual([
+        "get_timeseries",
+        "get_breakdown",
+        "get_conversions",
+        "compare_periods",
+      ]);
+    } finally {
+      await modernClient.close();
+    }
+  });
+
+  it("keeps serving legacy clients from the same handler", async () => {
+    const transport = new StreamableHTTPClientTransport(
+      new URL("https://test.local/mcp"),
+      { fetch: (url, init) => handler.fetch(new Request(url, init)) },
+    );
+    const legacyClient = new Client({ name: "legacy-test-client", version: "0.0.1" });
+
+    try {
+      await legacyClient.connect(transport);
+      expect(legacyClient.getProtocolEra()).toBe("legacy");
+      const { tools } = await legacyClient.listTools();
+      expect(tools).toHaveLength(4);
+    } finally {
+      await legacyClient.close();
+    }
   });
 });

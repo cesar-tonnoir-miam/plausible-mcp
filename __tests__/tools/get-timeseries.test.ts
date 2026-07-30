@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { register, resolveSiteId } from "../../src/tools/get-timeseries.js";
 import type { PlausibleClient } from "../../src/plausible.js";
 

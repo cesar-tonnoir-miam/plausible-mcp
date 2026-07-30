@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import {
   verifyCloudflareAccessJwt,
   clearCertsCache,
   parseAllowedEmailDomains,
   type AccessConfig,
 } from "../src/cf-access.js";
+import instrumentedWorker, { workerHandler } from "../src/worker.js";
+import type { Env } from "../src/env.js";
 
 const TEAM_DOMAIN = "https://sentry.cloudflareaccess.com";
 const AUD = "test-audience-tag";
@@ -14,6 +17,19 @@ const config: AccessConfig = {
   aud: AUD,
   allowedEmailDomains: ["sentry.io"],
 };
+
+const WORKER_ENV = {
+  CF_ACCESS_TEAM_DOMAIN: TEAM_DOMAIN,
+  CF_ACCESS_AUD: AUD,
+  MCP_ALLOWED_HOSTNAMES: "test.local",
+} satisfies Env;
+
+function workerFetch(request: Request, env: Env = WORKER_ENV): Promise<Response> {
+  if (!request.headers.has("Host")) {
+    request.headers.set("Host", new URL(request.url).host);
+  }
+  return workerHandler.fetch(request, env, {} as ExecutionContext);
+}
 
 function base64Url(obj: Record<string, unknown>): string {
   return btoa(JSON.stringify(obj))
@@ -346,5 +362,244 @@ describe("verifyCloudflareAccessJwt", () => {
     await verifyCloudflareAccessJwt(jwt, config);
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("MCP Worker entry", () => {
+  it("allows the modern protocol headers in CORS preflights", async () => {
+    const response = await workerFetch(new Request("https://test.local/mcp", {
+      method: "OPTIONS",
+      headers: { Origin: "https://client.example" },
+    }));
+
+    expect(response.status).toBe(204);
+    const allowed = response.headers.get("Access-Control-Allow-Headers") ?? "";
+    expect(allowed).toContain("Mcp-Method");
+    expect(allowed).toContain("Mcp-Name");
+    expect(allowed).toContain("MCP-Protocol-Version");
+    expect(allowed).not.toContain("Mcp-Session-Id");
+    expect(response.headers.get("Access-Control-Expose-Headers"))
+      .toBe("WWW-Authenticate");
+  });
+
+  it("returns a bearer challenge for BYOK authentication failures", async () => {
+    const missing = await workerFetch(new Request("https://test.local/mcp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    }));
+    expect(missing.status).toBe(401);
+    expect(missing.headers.get("WWW-Authenticate"))
+      .toBe('Bearer realm="plausible-mcp", error="invalid_request"');
+
+    const tooShort = await workerFetch(new Request("https://test.local/mcp", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer short",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    }));
+    expect(tooShort.status).toBe(401);
+    expect(tooShort.headers.get("WWW-Authenticate"))
+      .toBe('Bearer realm="plausible-mcp", error="invalid_token"');
+  });
+
+  it("rejects invalid hosts, opaque origins, and non-JSON media types", async () => {
+    const invalidHost = await workerFetch(new Request("https://test.local/mcp", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-key-123",
+        "Content-Type": "application/json",
+        Host: "evil.example",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    }));
+    expect(invalidHost.status).toBe(403);
+
+    const opaqueOrigin = await workerFetch(new Request("https://test.local/mcp", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-key-123",
+        "Content-Type": "application/json",
+        Origin: "null",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    }));
+    expect(opaqueOrigin.status).toBe(403);
+
+    const openByokOrigin = await workerFetch(new Request("https://test.local/mcp", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "https://browser.example",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    }));
+    expect(openByokOrigin.status).toBe(401);
+
+    const unapprovedInternalOrigin = await workerFetch(
+      new Request("https://test.local/internal", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Origin: "https://browser.example",
+        },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+      }),
+    );
+    expect(unapprovedInternalOrigin.status).toBe(403);
+
+    const wrongMediaType = await workerFetch(new Request("https://test.local/mcp", {
+      method: "POST",
+      headers: {
+        Accept: "application/json, text/event-stream",
+        Authorization: "Bearer test-key-123",
+        "Content-Type": "text/plain; note=application/json",
+      },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    }));
+    expect(wrongMediaType.status).toBe(415);
+  });
+
+  it("serves modern and legacy clients from the BYOK endpoint", async () => {
+    const makeTransport = () => new StreamableHTTPClientTransport(
+      new URL("https://test.local/mcp"),
+      {
+        requestInit: { headers: { Authorization: "Bearer test-key-123" } },
+        fetch: (url, init) => workerFetch(new Request(url, init)),
+      },
+    );
+    const modern = new Client(
+      { name: "worker-modern-test", version: "0.0.1" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
+    const legacy = new Client({ name: "worker-legacy-test", version: "0.0.1" });
+
+    try {
+      await modern.connect(makeTransport());
+      expect(modern.getProtocolEra()).toBe("modern");
+      expect((await modern.listTools()).tools).toHaveLength(5);
+
+      await legacy.connect(makeTransport());
+      expect(legacy.getProtocolEra()).toBe("legacy");
+      expect((await legacy.listTools()).tools).toHaveLength(5);
+    } finally {
+      await modern.close();
+      await legacy.close();
+    }
+  });
+
+  it("keeps Sentry tool spans and recordToolIO gating on modern requests", async () => {
+    clearCertsCache();
+    const { jwt, jwk } = await makeValidJwt();
+    const envelopes: string[] = [];
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const request = input instanceof Request ? input : new Request(input, init);
+      const url = new URL(request.url);
+
+      if (url.pathname === "/cdn-cgi/access/certs") {
+        return new Response(JSON.stringify({ keys: [jwk] }), { status: 200 });
+      }
+      if (url.hostname === "plausible.io") {
+        return new Response(JSON.stringify({
+          results: [{ dimensions: ["2026-07-30"], metrics: [10, 20, 30, 40] }],
+          meta: {},
+          query: {},
+        }), { status: 200 });
+      }
+      if (url.hostname === "sentry.example") {
+        envelopes.push(await request.text());
+        return new Response(null, { status: 200 });
+      }
+      throw new Error(`Unexpected fetch in test: ${request.url}`);
+    });
+
+    const pending: Promise<unknown>[] = [];
+    const ctx = {
+      waitUntil(promise: Promise<unknown>) {
+        pending.push(promise);
+      },
+      passThroughOnException() {},
+      props: {},
+    } as ExecutionContext;
+    const env = {
+      ...WORKER_ENV,
+      PLAUSIBLE_API_KEY: "shared-test-key",
+      SENTRY_DSN: "https://public@sentry.example/1",
+    } satisfies Env;
+    const transport = new StreamableHTTPClientTransport(
+      new URL("https://test.local/internal"),
+      {
+        requestInit: { headers: { "Cf-Access-Jwt-Assertion": jwt } },
+        fetch: (url, init) => {
+          const request = new Request(url, init);
+          request.headers.set("Host", new URL(request.url).host);
+          return instrumentedWorker.fetch!(request, env, ctx);
+        },
+      },
+    );
+    const client = new Client(
+      { name: "sentry-modern-test", version: "0.0.1" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
+
+    try {
+      await client.connect(transport);
+      await client.callTool({
+        name: "get_timeseries",
+        arguments: { site_id: "example.com", date_range: "7d" },
+      });
+    } finally {
+      await client.close();
+    }
+
+    for (let index = 0; index < pending.length; index++) {
+      await pending[index];
+    }
+    const recorded = envelopes.join("\n");
+    expect(recorded).toContain('"mcp.method.name":"tools/call"');
+    expect(recorded).toContain('"mcp.client.name":"sentry-modern-test"');
+    expect(recorded).toContain('"mcp.request.argument.site_id":"\\"example.com\\""');
+    expect(recorded).toContain('"mcp.tool.result.content":');
+    expect(recorded).not.toContain(jwt);
+    expect(recorded).not.toContain("shared-test-key");
+
+    envelopes.length = 0;
+    pending.length = 0;
+    const byokTransport = new StreamableHTTPClientTransport(
+      new URL("https://test.local/mcp"),
+      {
+        requestInit: { headers: { Authorization: "Bearer private-test-key" } },
+        fetch: (url, init) => {
+          const request = new Request(url, init);
+          request.headers.set("Host", new URL(request.url).host);
+          return instrumentedWorker.fetch!(request, env, ctx);
+        },
+      },
+    );
+    const byokClient = new Client(
+      { name: "sentry-byok-test", version: "0.0.1" },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+    );
+    try {
+      await byokClient.connect(byokTransport);
+      await byokClient.callTool({
+        name: "get_timeseries",
+        arguments: { site_id: "private.example", date_range: "7d" },
+      });
+    } finally {
+      await byokClient.close();
+    }
+    for (let index = 0; index < pending.length; index++) {
+      await pending[index];
+    }
+    const anonymous = envelopes.join("\n");
+    expect(anonymous).toContain('"mcp.method.name":"tools/call"');
+    expect(anonymous).not.toContain("mcp.request.argument.site_id");
+    expect(anonymous).not.toContain('"mcp.tool.result.content":');
+    expect(anonymous).not.toContain("private.example");
+    expect(anonymous).not.toContain("private-test-key");
+    expect(anonymous).not.toContain("sentry-byok-test");
   });
 });

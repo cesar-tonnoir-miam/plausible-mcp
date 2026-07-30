@@ -63,7 +63,7 @@ The client discovers the OAuth endpoints automatically, sends you through Sentry
 
 ### Local (STDIO)
 
-If you prefer to run it locally:
+If you prefer to run it locally, use Node.js 20 or newer:
 
 ```bash
 git clone https://github.com/getsentry/plausible-mcp.git
@@ -133,6 +133,8 @@ The Worker runs **no OAuth server** — Cloudflare Access is the authorization s
    ```
 4. **Set the `[vars]` in `wrangler.toml`**:
    - `ALLOWED_EMAIL_DOMAIN` — the email domain(s) allowed to sign in, comma-separated, `@` optional (default `sentry.io`). Enforced in code **in addition to** the Access policy in step 1, so set it to your own domain — otherwise every login is rejected.
+   - `MCP_ALLOWED_HOSTNAMES` — comma-separated hostnames accepted by the MCP endpoints. Replace `plausible-mcp.sentry.dev` with your worker's hostname; keep the localhost entries if you use `wrangler dev`.
+   - `MCP_ALLOWED_ORIGIN_HOSTNAMES` — comma-separated browser Origin hostnames allowed to call `/internal`. Non-browser clients do not send an `Origin` header.
 5. **Deploy** (`npx wrangler deploy`), then point an RFC 8707-capable MCP client at `https://<your-worker-host>/internal`.
 
 **Troubleshooting.** All of these are Cloudflare Access configuration, not the Worker — a request only reaches the Worker (and its Sentry spans) once Access forwards it:
@@ -155,6 +157,8 @@ The Worker runs **no OAuth server** — Cloudflare Access is the authorization s
 | `CF_ACCESS_AUD` | Yes (Worker `/internal`) | — | The Access application's Application Audience (AUD) tag — checked against the assertion's `aud`. |
 | `SENTRY_DSN` | No (Worker) | — | Sentry DSN for the Worker's own telemetry (`wrangler secret put SENTRY_DSN`). Unset disables Sentry — use your own DSN if you want telemetry on a self-hosted deployment. |
 | `ALLOWED_EMAIL_DOMAIN` | No (Worker `/internal`) | `sentry.io` | Comma-separated email domain(s) allowed to sign in to `/internal`. Set to your own domain when self-hosting. |
+| `MCP_ALLOWED_HOSTNAMES` | Yes (Worker) | — | Comma-separated hostname allowlist used to validate MCP `Host` headers. |
+| `MCP_ALLOWED_ORIGIN_HOSTNAMES` | No (Worker `/internal`) | — | Comma-separated browser Origin hostnames allowed to call `/internal`. A present Origin is rejected when the list is empty. |
 
 On the Worker, the `/mcp` endpoint needs no server-side key — each user passes their own via `Authorization: Bearer`. The `/internal` endpoint is fronted by Cloudflare Access Managed OAuth and uses a shared server-side `PLAUSIBLE_API_KEY` secret (see [self-hosting](#setting-up-the-internal-endpoint-cloudflare-access-managed-oauth)).
 

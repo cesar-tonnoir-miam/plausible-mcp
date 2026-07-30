@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { register } from "../../src/tools/get-conversions.js";
 import { createMockClient, getToolHandler } from "./_helpers.js";
 

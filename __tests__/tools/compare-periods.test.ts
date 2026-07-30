@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { register, extractAggregateMetrics, computeDeltas } from "../../src/tools/compare-periods.js";
 import { createMockClient, getToolHandler } from "./_helpers.js";
 import type { PlausibleResponse } from "../../src/plausible.js";
