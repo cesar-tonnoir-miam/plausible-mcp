@@ -31,6 +31,18 @@ describe("dimensionSchema", () => {
     expect(dimensionSchema.safeParse("event:props:destination_host").success).toBe(true);
   });
 
+  it("accepts a 300-character custom property name", () => {
+    const propertyName = "p".repeat(300);
+
+    expect(dimensionSchema.safeParse(`event:props:${propertyName}`).success).toBe(true);
+  });
+
+  it("rejects a custom property name longer than 300 characters", () => {
+    const propertyName = "p".repeat(301);
+
+    expect(dimensionSchema.safeParse(`event:props:${propertyName}`).success).toBe(false);
+  });
+
   it("rejects an unknown dimension", () => {
     expect(dimensionSchema.safeParse("event:nonsense").success).toBe(false);
   });
@@ -60,6 +72,28 @@ describe("propertyFilterSchema", () => {
         values: ["pro"],
       }).success
     ).toBe(false);
+  });
+
+  it("accepts a 300-character property name", () => {
+    const property = "p".repeat(300);
+
+    expect(propertyFilterSchema.safeParse({ property, values: ["enterprise"] }).success).toBe(
+      true
+    );
+  });
+
+  it("rejects a property name longer than 300 characters", () => {
+    const property = "p".repeat(301);
+
+    expect(propertyFilterSchema.safeParse({ property, values: ["enterprise"] }).success).toBe(
+      false
+    );
+  });
+
+  it("rejects a property name with the event:props: prefix", () => {
+    expect(() =>
+      propertyFilterSchema.parse({ property: "event:props:plan", values: ["enterprise"] })
+    ).toThrow("Custom property name must not include the event:props: prefix");
   });
 });
 

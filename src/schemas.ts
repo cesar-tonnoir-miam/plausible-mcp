@@ -130,6 +130,7 @@ export function buildGoalFilter(goal: string): unknown[] {
  * any `event:props:<name>` generically.
  */
 export const CUSTOM_PROPERTY_PREFIX = "event:props:";
+const MAX_CUSTOM_PROPERTY_NAME_LENGTH = 300;
 
 export function isCustomPropertyDimension(value: string): boolean {
   return (
@@ -144,7 +145,7 @@ const customPropertyDimensionSchema = z
     /^event:props:\S/,
     'Custom property dimension must look like "event:props:<name>"'
   )
-  .max(200);
+  .max(CUSTOM_PROPERTY_PREFIX.length + MAX_CUSTOM_PROPERTY_NAME_LENGTH);
 
 export const dimensionSchema = z
   .union([z.enum(VALID_DIMENSIONS), customPropertyDimensionSchema])
@@ -169,7 +170,10 @@ export const propertyFilterSchema = z.object({
   property: z
     .string()
     .min(1)
-    .max(200)
+    .max(MAX_CUSTOM_PROPERTY_NAME_LENGTH)
+    .refine((property) => !property.startsWith(CUSTOM_PROPERTY_PREFIX), {
+      message: "Custom property name must not include the event:props: prefix",
+    })
     .describe(
       'Custom property name WITHOUT the "event:props:" prefix (e.g. "plan" targets event:props:plan)'
     ),

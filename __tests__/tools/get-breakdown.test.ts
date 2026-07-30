@@ -101,6 +101,7 @@ describe("get_breakdown tool", () => {
     expect(client.query).toHaveBeenCalledWith(
       expect.objectContaining({
         dimensions: ["event:props:destination_host"],
+        metrics: ["visitors", "pageviews", "events"],
       })
     );
   });

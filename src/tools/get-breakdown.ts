@@ -10,6 +10,7 @@ import {
   metricsSchema,
   dimensionSchema,
   propertyFiltersSchema,
+  isCustomPropertyDimension,
   buildPageFilter,
   buildPropertyFilters,
   queryResultOutputSchema,
@@ -51,7 +52,11 @@ export function register(
       recordMcpClientInfo(ctx);
       try {
         const siteId = resolveSiteId(args.site_id, defaultSiteId);
-        const metrics = args.metrics ?? ["visitors", "pageviews", "bounce_rate"];
+        const metrics =
+          args.metrics ??
+          (isCustomPropertyDimension(args.dimension)
+            ? ["visitors", "pageviews", "events"]
+            : ["visitors", "pageviews", "bounce_rate"]);
         const limit = args.limit ?? 20;
 
         const filters: unknown[][] = [];
