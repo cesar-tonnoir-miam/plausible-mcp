@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.7.0
+
+### New Features ✨
+
+- (mcp) Serve protocol 2026-07-28 with SDK v2 by @sergical in [#36](https://github.com/getsentry/plausible-mcp/pull/36)
+
+### Bug Fixes 🐛
+
+- (telemetry) Cut MCP handshake span noise by @sergical in [#35](https://github.com/getsentry/plausible-mcp/pull/35)
+
+### Other
+
+- Support querying custom event properties by @chrmod in [#34](https://github.com/getsentry/plausible-mcp/pull/34)
+
 ## 0.6.0
 
 ### New Features ✨
