@@ -357,7 +357,7 @@ async function handleDirectMcp(
     return await workerMcpHandler.fetch(request, { authInfo });
   } catch (error) {
     Sentry.captureException(error);
-    return jsonError("Server configuration error.", 500);
+    return jsonError("MCP request failed.", 500);
   }
 }
 
