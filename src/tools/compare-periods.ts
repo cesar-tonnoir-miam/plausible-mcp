@@ -9,9 +9,11 @@ import {
   pageSchema,
   goalSchema,
   metricsSchema,
+  propertyFiltersSchema,
   DEFAULT_METRICS,
   buildPageFilter,
   buildGoalFilter,
+  buildPropertyFilters,
 } from "../schemas.js";
 import { resolveSiteId } from "./get-timeseries.js";
 
@@ -101,6 +103,7 @@ export function register(
         page: pageSchema,
         metrics: metricsSchema,
         goal: goalSchema,
+        property_filters: propertyFiltersSchema,
       }),
     },
     async (args, ctx) => {
@@ -112,6 +115,9 @@ export function register(
         const filters: unknown[][] = [];
         if (args.page) filters.push(buildPageFilter(args.page));
         if (args.goal) filters.push(buildGoalFilter(args.goal));
+        if (args.property_filters?.length) {
+          filters.push(...buildPropertyFilters(args.property_filters));
+        }
 
         const queryBase = {
           site_id: siteId,

@@ -43,8 +43,10 @@ METRICS: visitors, visits, pageviews, views_per_visit, bounce_rate, visit_durati
 
 DIMENSIONS (get_breakdown): event:page, event:goal, event:hostname, visit:entry_page, visit:exit_page, visit:source, visit:referrer, visit:channel, visit:utm_medium/source/campaign/content/term, visit:device, visit:browser(_version), visit:os(_version). Geography comes in two forms: visit:country/region/city return ISO/Geoname codes, while visit:country_name/region_name/city_name return human-readable names — prefer the *_name variants when presenting geography to users.
 
+CUSTOM PROPERTIES: sites send their own custom event properties, addressed as "event:props:<name>". Break down by one in get_breakdown with dimension "event:props:<name>" (e.g. "event:props:plan"). Filter by one on any tool with property_filters, e.g. [{ "property": "plan", "operator": "is", "values": ["pro"] }] — the property is the bare name without the "event:props:" prefix; operators are is, is_not, contains, contains_not. Property names are site-specific; if you don't know them, break down by the property to see its values, or ask the user.
+
 COMBINATION RULES:
-- Session metrics (bounce_rate, visit_duration, views_per_visit, visits) cannot be combined with event-level dimensions (event:goal, event:page, event:hostname) or goal filters. Use event-level metrics (visitors, pageviews, events, conversion_rate) in those cases.
+- Session metrics bounce_rate, visit_duration, and views_per_visit cannot be combined with event:goal or event:props:<name> dimensions or goal filters. event:page is compatible, and event:hostname is compatible when paired with event:page. Use visitors, visits, pageviews, or events for custom-property breakdowns.
 - For goal conversions, use get_conversions rather than passing session metrics alongside a goal.
 
 SITE: site_id is a bare domain (e.g. "example.com"). If omitted, the server's default site is used; if there is no default, the call fails — ask the user which site to query.`;

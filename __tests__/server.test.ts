@@ -82,6 +82,7 @@ describe("MCP Server Integration", () => {
     expect(instructions).toBeTruthy();
     expect(instructions).toContain("date_range");
     expect(instructions).toContain("Session metrics");
+    expect(instructions).toContain("event:props:<name>");
   });
 
   it("returns structuredContent alongside the text block", async () => {
