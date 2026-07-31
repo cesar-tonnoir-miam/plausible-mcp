@@ -201,10 +201,12 @@ PLAUSIBLE_API_KEY=your-key npx @modelcontextprotocol/inspector node dist/index.j
 
 ### LLM Evals
 
-Verifies Claude picks the right tool for natural language analytics questions:
+Verifies the model picks the right tool for natural language analytics questions. Runs through
+OpenRouter, so any tool-calling model works — the default is `anthropic/claude-sonnet-5`:
 
 ```bash
-ANTHROPIC_API_KEY=sk-... pnpm eval
+OPENROUTER_API_KEY=sk-or-... pnpm eval
+OPENROUTER_MODEL=openai/gpt-5 OPENROUTER_API_KEY=sk-or-... pnpm eval  # try another model
 ```
 
 ## Architecture

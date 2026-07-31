@@ -1,18 +1,24 @@
 #!/usr/bin/env tsx
 
-import Anthropic from "@anthropic-ai/sdk";
+import OpenAI from "openai";
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createServer } from "../src/server.js";
 import { cases } from "./cases.js";
 
-const apiKey = process.env.ANTHROPIC_API_KEY;
+const apiKey = process.env.OPENROUTER_API_KEY;
 if (!apiKey) {
-  console.error("ANTHROPIC_API_KEY is required to run evals.");
-  console.error("Usage: ANTHROPIC_API_KEY=sk-... pnpm eval");
+  console.error("OPENROUTER_API_KEY is required to run evals.");
+  console.error("Usage: OPENROUTER_API_KEY=sk-or-... pnpm eval");
   process.exit(1);
 }
 
-const anthropic = new Anthropic({ apiKey });
+// OpenRouter speaks the OpenAI chat-completions API; model ids are "<vendor>/<model>".
+const model = process.env.OPENROUTER_MODEL ?? "anthropic/claude-sonnet-5";
+
+const openrouter = new OpenAI({
+  apiKey,
+  baseURL: "https://openrouter.ai/api/v1",
+});
 
 // Get tool schemas from our MCP server
 async function getToolSchemas() {
@@ -30,48 +36,65 @@ async function getToolSchemas() {
   const { tools } = await client.listTools();
   await client.close();
 
-  // Convert MCP tool schemas to Anthropic tool format
+  // Convert MCP tool schemas to OpenAI function-tool format
   return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description ?? "",
-    input_schema: tool.inputSchema as Anthropic.Tool["input_schema"],
+    type: "function" as const,
+    function: {
+      name: tool.name,
+      description: tool.description ?? "",
+      parameters: tool.inputSchema as Record<string, unknown>,
+    },
   }));
 }
 
 async function runEval(
-  tools: Anthropic.Tool[],
+  tools: OpenAI.ChatCompletionTool[],
   evalCase: (typeof cases)[0]
 ): Promise<{ pass: boolean; errors: string[] }> {
-  const response = await anthropic.messages.create({
-    model: "claude-sonnet-5",
+  const response = await openrouter.chat.completions.create({
+    model,
     max_tokens: 1024,
-    system:
-      "You are a marketing analytics assistant. When the user asks about website analytics, use the available tools. Always specify the site_id as 'example.com' unless told otherwise.",
-    messages: [{ role: "user", content: evalCase.prompt }],
+    messages: [
+      {
+        role: "system",
+        content:
+          "You are a marketing analytics assistant. When the user asks about website analytics, use the available tools. Always specify the site_id as 'example.com' unless told otherwise.",
+      },
+      { role: "user", content: evalCase.prompt },
+    ],
     tools,
-    tool_choice: { type: "any" },
+    tool_choice: "required",
   });
 
-  const toolUse = response.content.find(
-    (block) => block.type === "tool_use"
-  ) as Anthropic.ToolUseBlock | undefined;
+  const toolCall = response.choices[0]?.message.tool_calls?.[0];
 
-  if (!toolUse) {
-    return { pass: false, errors: ["No tool_use block in response"] };
+  if (!toolCall || toolCall.type !== "function") {
+    return { pass: false, errors: ["No tool call in response"] };
   }
 
   const errors: string[] = [];
 
-  if (toolUse.name !== evalCase.expectedTool) {
+  if (toolCall.function.name !== evalCase.expectedTool) {
     errors.push(
-      `Wrong tool: expected "${evalCase.expectedTool}", got "${toolUse.name}"`
+      `Wrong tool: expected "${evalCase.expectedTool}", got "${toolCall.function.name}"`
     );
   }
 
-  const assertionErrors = evalCase.assertions(
-    toolUse.input as Record<string, unknown>
-  );
-  errors.push(...assertionErrors);
+  // Arguments arrive as a JSON string, unlike Anthropic's already-parsed input.
+  let args: Record<string, unknown>;
+  try {
+    args = JSON.parse(toolCall.function.arguments || "{}");
+  } catch {
+    return {
+      pass: false,
+      errors: [
+        ...errors,
+        `Tool arguments were not valid JSON: ${toolCall.function.arguments}`,
+      ],
+    };
+  }
+
+  errors.push(...evalCase.assertions(args));
 
   return { pass: errors.length === 0, errors };
 }
@@ -80,7 +103,10 @@ async function runEval(
 async function main() {
   console.log("Loading tool schemas from MCP server...\n");
   const tools = await getToolSchemas();
-  console.log(`Found ${tools.length} tools: ${tools.map((t) => t.name).join(", ")}\n`);
+  console.log(
+    `Found ${tools.length} tools: ${tools.map((t) => t.function.name).join(", ")}`
+  );
+  console.log(`Model: ${model}\n`);
 
   let passed = 0;
   let failed = 0;

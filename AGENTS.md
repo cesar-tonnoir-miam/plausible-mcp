@@ -25,8 +25,8 @@ pnpm test:watch          # Watch mode
 pnpm test __tests__/tools/get-timeseries.test.ts  # Single test file
 pnpm deploy              # Deploy to Cloudflare Workers (includes Sentry sourcemaps)
 
-# LLM evals (requires ANTHROPIC_API_KEY)
-ANTHROPIC_API_KEY=sk-... pnpm eval
+# LLM evals (requires OPENROUTER_API_KEY; OPENROUTER_MODEL overrides the default model)
+OPENROUTER_API_KEY=sk-or-... pnpm eval
 
 # Test with MCP Inspector
 pnpm build && PLAUSIBLE_API_KEY=your-key npx @modelcontextprotocol/inspector node dist/index.js

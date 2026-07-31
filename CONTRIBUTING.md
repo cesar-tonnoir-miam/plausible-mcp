@@ -31,11 +31,13 @@ Tests use [Vitest](https://vitest.dev) with mocked `fetch` — no Plausible acco
 
 ## Running LLM Evals
 
-Requires an Anthropic API key:
+Requires an OpenRouter API key:
 
 ```bash
-ANTHROPIC_API_KEY=sk-... pnpm eval
+OPENROUTER_API_KEY=sk-or-... pnpm eval
 ```
+
+The model defaults to `anthropic/claude-sonnet-5`; override it with `OPENROUTER_MODEL`.
 
 ## Testing the MCP Server Locally
 
