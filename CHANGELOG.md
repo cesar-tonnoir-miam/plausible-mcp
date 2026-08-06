@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1
+
+### New Features ✨
+
+- Filter by built-in dimensions via property_filters by @sergical in [#37](https://github.com/getsentry/plausible-mcp/pull/37)
+
+### Other
+
+- Run LLM evals through OpenRouter instead of the Anthropic API by @sergical in [a2c416f9](https://github.com/getsentry/plausible-mcp/commit/a2c416f9fb607482396d79a6cc73da8dd88e6d9c)
+
 ## 0.7.0
 
 ### New Features ✨
