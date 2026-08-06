@@ -136,4 +136,30 @@ export const cases: EvalCase[] = [
       return errors;
     },
   },
+  {
+    name: "breakdown filtered by a visit-level dimension",
+    prompt:
+      "What are the top pages on example.com this month for visitors who arrived via the Organic Search channel?",
+    expectedTool: "get_breakdown",
+    assertions: (args) => {
+      const errors: string[] = [];
+      if (args.dimension !== "event:page") {
+        errors.push(`Expected dimension "event:page", got "${args.dimension}"`);
+      }
+      const filters = args.property_filters as
+        | Array<{ property?: string; values?: string[] }>
+        | undefined;
+      const match = filters?.find(
+        (f) =>
+          f.property === "visit:channel" &&
+          (f.values ?? []).includes("Organic Search")
+      );
+      if (!match) {
+        errors.push(
+          `Expected a property_filters entry for visit:channel=Organic Search, got ${JSON.stringify(args.property_filters)}`
+        );
+      }
+      return errors;
+    },
+  },
 ];

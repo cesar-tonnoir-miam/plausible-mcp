@@ -122,6 +122,43 @@ describe("get_breakdown tool", () => {
     );
   });
 
+  it("filters by a visit-level dimension while breaking down by another dimension", async () => {
+    const handler = getToolHandler(server, "get_breakdown");
+    const result = await handler({
+      site_id: "example.com",
+      date_range: "7d",
+      dimension: "event:page",
+      property_filters: [
+        { property: "visit:channel", operator: "is", values: ["Organic Search"] },
+      ],
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(client.query).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dimensions: ["event:page"],
+        filters: [["is", "visit:channel", ["Organic Search"]]],
+      })
+    );
+  });
+
+  it("rejects combining the page shortcut with an event:page filter", async () => {
+    const handler = getToolHandler(server, "get_breakdown");
+    const result = await handler({
+      site_id: "example.com",
+      date_range: "7d",
+      dimension: "visit:source",
+      page: "/pricing",
+      property_filters: [
+        { property: "event:page", operator: "is", values: ["/docs"] },
+      ],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("property_filters");
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
   it("combines page and custom property filters", async () => {
     const handler = getToolHandler(server, "get_breakdown");
     await handler({
