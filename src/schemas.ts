@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { PlausibleResponse } from "./plausible.js";
+import { UserFacingError } from "./errors.js";
 
 export const VALID_METRICS = [
   "visitors",
@@ -231,6 +232,30 @@ export const propertyFiltersSchema = z
     'Filter results by built-in dimensions or custom event properties, e.g. [{ "property": "visit:channel", "operator": "is", "values": ["Organic Search"] }] or [{ "property": "plan", "values": ["pro"] }]. Entries are combined with AND.'
   )
   .optional();
+
+/**
+ * The `page`/`goal` shortcut params compile to event:page / event:goal filters. A
+ * property_filters entry targeting the same dimension would AND with the shortcut —
+ * almost always a contradiction that silently returns zero rows — so the overlap is
+ * rejected up front, steering the caller to a single spelling of the constraint.
+ */
+export function assertNoShortcutOverlap(
+  propertyFilters: PropertyFilter[] | undefined,
+  shortcuts: { page?: string; goal?: string }
+): void {
+  if (!propertyFilters?.length) return;
+  const pairs = [
+    { param: "page", value: shortcuts.page, dimension: "event:page" },
+    { param: "goal", value: shortcuts.goal, dimension: "event:goal" },
+  ];
+  for (const { param, value, dimension } of pairs) {
+    if (value && propertyFilters.some((f) => f.property === dimension)) {
+      throw new UserFacingError(
+        `The "${param}" parameter and a property_filters entry both target ${dimension}; combined they almost always match nothing. Drop "${param}" and express the whole constraint in property_filters.`
+      );
+    }
+  }
+}
 
 /**
  * Build Plausible Stats API v2 filters from filter entries. Built-in dimensions and

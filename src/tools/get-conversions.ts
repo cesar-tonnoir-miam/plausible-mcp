@@ -12,6 +12,7 @@ import {
   buildPageFilter,
   buildGoalFilter,
   buildPropertyFilters,
+  assertNoShortcutOverlap,
   queryResultOutputSchema,
   buildQueryStructuredContent,
 } from "../schemas.js";
@@ -49,6 +50,10 @@ export function register(
         const siteId = resolveSiteId(args.site_id, defaultSiteId);
         const metrics = ["visitors", "events", "conversion_rate"];
 
+        assertNoShortcutOverlap(args.property_filters, {
+          page: args.page,
+          goal: args.goal,
+        });
         const filters: unknown[][] = [];
         if (args.goal) filters.push(buildGoalFilter(args.goal));
         if (args.page) filters.push(buildPageFilter(args.page));

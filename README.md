@@ -182,7 +182,7 @@ Every query tool accepts `property_filters`, which — despite the name — filt
 
 - `property` — a built-in dimension (e.g. `visit:channel`, `visit:source`, `event:page`) or a custom property as its bare name (`"plan"` targets `event:props:plan`).
 - `operator` — `is`, `is_not`, `contains`, `contains_not` (default `is`). `event:goal` supports only `is` and `contains`.
-- Multiple entries combine with AND, as do the `page`/`goal` shortcut parameters.
+- Multiple entries combine with AND, as do the `page`/`goal` shortcut parameters. Targeting `event:page`/`event:goal` from both a shortcut and `property_filters` in the same call is rejected — use one or the other.
 
 For example, top pages for organic search traffic: `get_breakdown` with `dimension: "event:page"` and `property_filters: [{ "property": "visit:channel", "values": ["Organic Search"] }]`.
 

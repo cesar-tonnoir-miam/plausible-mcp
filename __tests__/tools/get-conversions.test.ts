@@ -93,6 +93,22 @@ describe("get_conversions tool", () => {
     );
   });
 
+  it("rejects combining the goal shortcut with an event:goal filter", async () => {
+    const handler = getToolHandler(server, "get_conversions");
+    const result = await handler({
+      site_id: "example.com",
+      date_range: "30d",
+      goal: "Signup",
+      property_filters: [
+        { property: "event:goal", operator: "is", values: ["Purchase"] },
+      ],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("property_filters");
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
   it("uses default site_id", async () => {
     const handler = getToolHandler(server, "get_conversions");
     await handler({ date_range: "7d" });

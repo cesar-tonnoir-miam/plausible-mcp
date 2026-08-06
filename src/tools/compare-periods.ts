@@ -14,6 +14,7 @@ import {
   buildPageFilter,
   buildGoalFilter,
   buildPropertyFilters,
+  assertNoShortcutOverlap,
 } from "../schemas.js";
 import { resolveSiteId } from "./get-timeseries.js";
 
@@ -112,6 +113,10 @@ export function register(
         const siteId = resolveSiteId(args.site_id, defaultSiteId);
         const metrics = args.metrics ?? DEFAULT_METRICS;
 
+        assertNoShortcutOverlap(args.property_filters, {
+          page: args.page,
+          goal: args.goal,
+        });
         const filters: unknown[][] = [];
         if (args.page) filters.push(buildPageFilter(args.page));
         if (args.goal) filters.push(buildGoalFilter(args.goal));

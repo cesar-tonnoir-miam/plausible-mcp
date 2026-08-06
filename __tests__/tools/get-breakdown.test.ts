@@ -142,6 +142,23 @@ describe("get_breakdown tool", () => {
     );
   });
 
+  it("rejects combining the page shortcut with an event:page filter", async () => {
+    const handler = getToolHandler(server, "get_breakdown");
+    const result = await handler({
+      site_id: "example.com",
+      date_range: "7d",
+      dimension: "visit:source",
+      page: "/pricing",
+      property_filters: [
+        { property: "event:page", operator: "is", values: ["/docs"] },
+      ],
+    });
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("property_filters");
+    expect(client.query).not.toHaveBeenCalled();
+  });
+
   it("combines page and custom property filters", async () => {
     const handler = getToolHandler(server, "get_breakdown");
     await handler({

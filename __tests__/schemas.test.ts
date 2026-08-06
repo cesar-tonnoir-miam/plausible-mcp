@@ -4,6 +4,7 @@ import {
   isCustomPropertyDimension,
   dimensionSchema,
   propertyFilterSchema,
+  assertNoShortcutOverlap,
 } from "../src/schemas.js";
 
 describe("isCustomPropertyDimension", () => {
@@ -181,5 +182,38 @@ describe("buildPropertyFilters", () => {
     expect(
       buildPropertyFilters([{ property: "event:props:plan", values: ["pro"] }])
     ).toEqual([["is", "event:props:plan", ["pro"]]]);
+  });
+});
+
+describe("assertNoShortcutOverlap", () => {
+  it("passes when the filters target other dimensions", () => {
+    expect(() =>
+      assertNoShortcutOverlap(
+        [{ property: "visit:channel", values: ["Organic Search"] }],
+        { page: "/pricing", goal: "Signup" }
+      )
+    ).not.toThrow();
+  });
+
+  it("passes when the shortcut param is absent", () => {
+    expect(() =>
+      assertNoShortcutOverlap([{ property: "event:page", values: ["/docs"] }], {})
+    ).not.toThrow();
+  });
+
+  it("rejects the page shortcut alongside an event:page filter", () => {
+    expect(() =>
+      assertNoShortcutOverlap([{ property: "event:page", values: ["/docs"] }], {
+        page: "/pricing",
+      })
+    ).toThrow('Drop "page"');
+  });
+
+  it("rejects the goal shortcut alongside an event:goal filter", () => {
+    expect(() =>
+      assertNoShortcutOverlap([{ property: "event:goal", values: ["Purchase"] }], {
+        goal: "Signup",
+      })
+    ).toThrow('Drop "goal"');
   });
 });

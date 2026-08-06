@@ -13,6 +13,7 @@ import {
   isCustomPropertyDimension,
   buildPageFilter,
   buildPropertyFilters,
+  assertNoShortcutOverlap,
   queryResultOutputSchema,
   buildQueryStructuredContent,
 } from "../schemas.js";
@@ -59,6 +60,7 @@ export function register(
             : ["visitors", "pageviews", "bounce_rate"]);
         const limit = args.limit ?? 20;
 
+        assertNoShortcutOverlap(args.property_filters, { page: args.page });
         const filters: unknown[][] = [];
         if (args.page) filters.push(buildPageFilter(args.page));
         if (args.property_filters?.length) {
