@@ -176,12 +176,22 @@ This server wraps the [Plausible Stats API v2](https://plausible.io/docs/stats-a
 
 The `*_name` geography dimensions return human-readable names (e.g. "Canada"); the plain `visit:country`/`region`/`city` return ISO/Geoname codes.
 
+### Filtering
+
+Every query tool accepts `property_filters`, which — despite the name — filters by built-in dimensions as well as custom event properties. Each entry is `{ "property", "operator", "values" }`:
+
+- `property` — a built-in dimension (e.g. `visit:channel`, `visit:source`, `event:page`) or a custom property as its bare name (`"plan"` targets `event:props:plan`).
+- `operator` — `is`, `is_not`, `contains`, `contains_not` (default `is`). `event:goal` supports only `is` and `contains`.
+- Multiple entries combine with AND, as do the `page`/`goal` shortcut parameters.
+
+For example, top pages for organic search traffic: `get_breakdown` with `dimension: "event:page"` and `property_filters: [{ "property": "visit:channel", "values": ["Organic Search"] }]`.
+
 ### Custom Properties
 
 Sites send their own [custom event properties](https://plausible.io/docs/custom-props/introduction), addressed as `event:props:<name>`. These are site-specific, so there's no fixed list.
 
 - **Break down by** a custom property: pass `get_breakdown` a `dimension` of `event:props:<name>` (e.g. `event:props:plan`).
-- **Filter by** a custom property on any query tool via `property_filters`, e.g. `[{ "property": "plan", "operator": "is", "values": ["pro"] }]`. The `property` is the bare name (no `event:props:` prefix); operators are `is`, `is_not`, `contains`, `contains_not`, and multiple entries combine with AND.
+- **Filter by** a custom property via `property_filters` with the bare name, e.g. `[{ "property": "plan", "operator": "is", "values": ["pro"] }]`.
 
 ## Development
 

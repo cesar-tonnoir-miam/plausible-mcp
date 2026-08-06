@@ -94,10 +94,51 @@ describe("propertyFilterSchema", () => {
     );
   });
 
-  it("rejects a property name with the event:props: prefix", () => {
-    expect(() =>
-      propertyFilterSchema.parse({ property: "event:props:plan", values: ["enterprise"] })
-    ).toThrow("Custom property name must not include the event:props: prefix");
+  it("accepts a fully-qualified event:props: property", () => {
+    expect(
+      propertyFilterSchema.safeParse({
+        property: "event:props:plan",
+        values: ["enterprise"],
+      }).success
+    ).toBe(true);
+  });
+
+  it("accepts built-in dimensions", () => {
+    for (const property of ["visit:channel", "visit:source", "event:page", "visit:country_name"]) {
+      expect(
+        propertyFilterSchema.safeParse({ property, values: ["x"] }).success
+      ).toBe(true);
+    }
+  });
+
+  it("rejects an unknown dimension-like property instead of prefixing it", () => {
+    const result = propertyFilterSchema.safeParse({
+      property: "visit:chanel",
+      values: ["Organic Search"],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it("rejects negated event:goal filters", () => {
+    expect(
+      propertyFilterSchema.safeParse({
+        property: "event:goal",
+        operator: "is_not",
+        values: ["Signup"],
+      }).success
+    ).toBe(false);
+  });
+
+  it("accepts is and contains on event:goal", () => {
+    for (const operator of ["is", "contains"] as const) {
+      expect(
+        propertyFilterSchema.safeParse({
+          property: "event:goal",
+          operator,
+          values: ["Signup"],
+        }).success
+      ).toBe(true);
+    }
   });
 });
 
@@ -126,5 +167,19 @@ describe("buildPropertyFilters", () => {
       ["is", "event:props:plan", ["pro"]],
       ["is_not", "event:props:ctry", ["US"]],
     ]);
+  });
+
+  it("passes built-in dimensions through verbatim", () => {
+    expect(
+      buildPropertyFilters([
+        { property: "visit:channel", operator: "is", values: ["Organic Search"] },
+      ])
+    ).toEqual([["is", "visit:channel", ["Organic Search"]]]);
+  });
+
+  it("does not double-prefix a fully-qualified event:props: property", () => {
+    expect(
+      buildPropertyFilters([{ property: "event:props:plan", values: ["pro"] }])
+    ).toEqual([["is", "event:props:plan", ["pro"]]]);
   });
 });

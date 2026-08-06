@@ -170,42 +170,77 @@ export type PropertyFilter = {
   values: string[];
 };
 
-export const propertyFilterSchema = z.object({
-  property: z
-    .string()
-    .min(1)
-    .max(MAX_CUSTOM_PROPERTY_NAME_LENGTH)
-    .refine((property) => !property.startsWith(CUSTOM_PROPERTY_PREFIX), {
-      message: "Custom property name must not include the event:props: prefix",
-    })
-    .describe(
-      'Custom property name WITHOUT the "event:props:" prefix (e.g. "plan" targets event:props:plan)'
-    ),
-  operator: z
-    .enum(PROPERTY_FILTER_OPERATORS)
-    .default("is")
-    .describe("Match operator: is, is_not, contains, contains_not (default: is)"),
-  values: z
-    .array(z.string())
-    .min(1)
-    .describe("One or more values to match the property against"),
-});
+/**
+ * A filter target is either a built-in dimension (used verbatim) or a custom event
+ * property, given bare ("plan") or fully qualified ("event:props:plan"). Any other
+ * value containing ":" is rejected up front — silently prefixing it would turn a
+ * typo like "visit:chanel" into a nonsense event:props:visit:chanel filter.
+ */
+function isFilterableDimension(property: string): boolean {
+  return (
+    isCustomPropertyDimension(property) ||
+    (VALID_DIMENSIONS as readonly string[]).includes(property)
+  );
+}
+
+export const propertyFilterSchema = z
+  .object({
+    property: z
+      .string()
+      .min(1)
+      .max(CUSTOM_PROPERTY_PREFIX.length + MAX_CUSTOM_PROPERTY_NAME_LENGTH)
+      .refine(
+        (property) => !property.includes(":") || isFilterableDimension(property),
+        {
+          message:
+            'A property containing ":" must be a built-in dimension (e.g. "visit:channel") or "event:props:<name>"',
+        }
+      )
+      .refine(
+        (property) =>
+          property.includes(":") ||
+          property.length <= MAX_CUSTOM_PROPERTY_NAME_LENGTH,
+        {
+          message: `Custom property name must be at most ${MAX_CUSTOM_PROPERTY_NAME_LENGTH} characters`,
+        }
+      )
+      .describe(
+        'What to filter on: a built-in dimension (e.g. "visit:channel", "visit:source", "event:page") or a custom event property as its bare name (e.g. "plan" targets event:props:plan)'
+      ),
+    operator: z
+      .enum(PROPERTY_FILTER_OPERATORS)
+      .default("is")
+      .describe("Match operator: is, is_not, contains, contains_not (default: is)"),
+    values: z
+      .array(z.string())
+      .min(1)
+      .describe("One or more values to match the property against"),
+  })
+  // Plausible rejects negated goal filters, so catch them before they become a 400.
+  .refine(
+    (f) =>
+      f.property !== "event:goal" || f.operator === "is" || f.operator === "contains",
+    {
+      message: 'event:goal filters only support the "is" and "contains" operators',
+    }
+  );
 
 export const propertyFiltersSchema = z
   .array(propertyFilterSchema)
   .describe(
-    'Filter by custom event properties, e.g. [{ "property": "plan", "operator": "is", "values": ["pro"] }]. Combined with other filters using AND.'
+    'Filter results by built-in dimensions or custom event properties, e.g. [{ "property": "visit:channel", "operator": "is", "values": ["Organic Search"] }] or [{ "property": "plan", "values": ["pro"] }]. Entries are combined with AND.'
   )
   .optional();
 
 /**
- * Build Plausible Stats API v2 filters for custom event properties.
- * Each entry becomes `[operator, "event:props:<name>", values]`.
+ * Build Plausible Stats API v2 filters from filter entries. Built-in dimensions and
+ * fully-qualified `event:props:<name>` targets pass through verbatim; bare custom
+ * property names get the `event:props:` prefix.
  */
 export function buildPropertyFilters(filters: PropertyFilter[]): unknown[][] {
   return filters.map((f) => [
     f.operator ?? "is",
-    `${CUSTOM_PROPERTY_PREFIX}${f.property}`,
+    f.property.includes(":") ? f.property : `${CUSTOM_PROPERTY_PREFIX}${f.property}`,
     f.values,
   ]);
 }
