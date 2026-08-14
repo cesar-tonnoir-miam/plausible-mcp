@@ -22,12 +22,12 @@ Tests use [Vitest](https://vitest.dev) with mocked `fetch` — no Plausible acco
 
 ## Adding a New Tool
 
-1. Create `src/tools/your-tool.ts` following the pattern in existing tools
-2. Export a `register(server, client, defaultSiteId?)` function
-3. Add `annotations: { readOnlyHint: true }` (all tools are read-only)
+1. Create `src/tools/your-tool.ts`, starting from the closest existing tool. A tool that queries Plausible exports `register(server, client, defaultSiteId?)` — copy `get-timeseries.ts`. A tool that does not needs no client, so it exports `register(server)` — copy `send-feedback.ts`.
+2. Declare an `outputSchema` and return `structuredContent` alongside the text block. Every tool does this; query-shaped results reuse `queryResultOutputSchema` and `buildQueryStructuredContent` from `src/schemas.ts`.
+3. Set `annotations` to describe what the tool really does. The query tools are read-only; `send_feedback` writes to Sentry, so it sets `readOnlyHint: false`.
 4. Register it in `src/server.ts`
 5. Add tests in `__tests__/tools/your-tool.test.ts`
-6. Add an eval case in `evals/cases.ts`
+6. Add an eval case in `evals/cases.ts`. Evals grade whether a model picks the right tool from a plain-language prompt, so this applies to tools a user would ask for in words — `send_feedback` has none.
 
 ## Running LLM Evals
 

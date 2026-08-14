@@ -77,8 +77,16 @@ request envelope onto attributed `/internal` tool spans for per-trace deep dives
 BYOK events strip it along with other caller-controlled identity. It remains a secondary
 debugging attribute, never a dashboard dimension.
 
-## Span noise dropped before send (`beforeSendTransaction`)
+## Span noise dropped before send
 
+Most of this happens in `beforeSendTransaction`; the rate limiter is the exception.
+
+- **The rate limiter binding span** is dropped by the `ignoreSpans` option, matched on the
+  `sentry.origin` attribute rather than the span name, which embeds the binding name.
+  `@sentry/cloudflare` wraps any binding exposing `limit()` and times the call but records no
+  outcome, so an allowed request and a throttled one produce identical spans. `beforeSendSpan`
+  cannot drop it — returning `null` there only logs a warning and keeps the span. 429s stay
+  visible through `app.server.response`.
 - **Untracked routes** (`/.env`, `/wp-admin/*`, `/`, `favicon.ico`, …): dropped entirely.
 - **`server/discover`, `ping`, `tools/list`, and healthcheck `initialize`**: sampled to
   `HEARTBEAT_SPAN_KEEP_RATE` (1%) — a thin heartbeat in Trace Explorer without the flood.
@@ -98,13 +106,13 @@ debugging attribute, never a dashboard dimension.
 
 ## Privacy (unchanged)
 
-`/mcp` (BYOK) stays anonymous: `beforeSend` strips both the ingest-inferred IP and any
-JSON-RPC request body from events without an email (`src/redaction.ts`),
-`beforeSendTransaction` applies the same identity guardrail, and `beforeSendSpan` filters
-`Authorization`/`Cookie`/`Cf-Access-Jwt-Assertion` from event request headers and span data.
-Only `/internal` attaches
-`Sentry.setUser({ email })` and records tool I/O. The `app.client.family` attribute is a
-bounded bucket, not PII.
+`/mcp` (BYOK) stays anonymous, through two separate mechanisms. `beforeSend` and
+`beforeSendTransaction` both call `anonymizeEventWithoutEmail` (`src/redaction.ts`), which
+always filters `Authorization`/`Cookie`/`Cf-Access-Jwt-Assertion` out of request headers,
+and — on any event without an email — replaces the user with an explicitly IP-less object
+and deletes the JSON-RPC request body. `beforeSendSpan` filters the same header names out of
+span data, which is all it can reach. Only `/internal` attaches `Sentry.setUser({ email })`
+and records tool I/O. The `app.client.family` attribute is a bounded bucket, not PII.
 
 ## Query recipes
 
@@ -129,13 +137,18 @@ dataset=tracemetrics query='metric:app.server.response http.response.status_code
 aggregate=sum(value) by app.client.family
 ```
 
-Real tool calls, grouped by client (spans — noise already sampled out):
+Real tool calls (spans — noise already sampled out):
 
 ```text
 dataset=spans query='span.op:mcp.server span.description:"tools/call*"'
-fields=timestamp,trace,span.description,app.client.family,mcp.method.name
+fields=timestamp,trace,span.description,mcp.client.name,mcp.method.name
 sort=-timestamp
 ```
+
+`app.client.family` is not available here: it is stamped on the `http.server` root span, not
+on this `mcp.server` child (see "Span attributes"). Join through `trace` to reach it, or group
+by client with the metric recipes above. `mcp.client.name` is caller-controlled — fine for
+eyeballing a trace, not for a dashboard dimension.
 
 ## Future pillar
 
