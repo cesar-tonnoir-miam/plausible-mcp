@@ -127,11 +127,13 @@ The Worker runs **no OAuth server** — Cloudflare Access is the authorization s
    - `Bypass` ≠ `Allow`: an `Allow` policy still forces an interactive login (the client gets an HTML `302` to the login page and fails with `Unexpected content type: text/html`). Only `Bypass` lets the request through with no authentication, so the Worker's own Bearer-key check applies.
 3. **Set the worker secrets**:
    ```bash
-   npx wrangler secret put CF_ACCESS_TEAM_DOMAIN      # https://<team>.cloudflareaccess.com  (no trailing slash)
-   npx wrangler secret put CF_ACCESS_AUD              # the Managed OAuth application's AUD tag (from step 1)
    npx wrangler secret put PLAUSIBLE_API_KEY          # shared key for /internal queries
+   npx wrangler secret put SENTRY_DSN                 # optional — the Worker's own telemetry
    ```
+   `CF_ACCESS_TEAM_DOMAIN` and `CF_ACCESS_AUD` are **not** secrets — a public JWKS URL and an application identifier — so they go in `[vars]` in step 4.
 4. **Set the `[vars]` in `wrangler.toml`**:
+   - `CF_ACCESS_TEAM_DOMAIN` — `https://<team>.cloudflareaccess.com`, no trailing slash. Verifies the `Cf-Access-Jwt-Assertion` JWKS and issuer.
+   - `CF_ACCESS_AUD` — the AUD tag you copied in step 1.
    - `ALLOWED_EMAIL_DOMAIN` — the email domain(s) allowed to sign in, comma-separated, `@` optional (default `sentry.io`). Enforced in code **in addition to** the Access policy in step 1, so set it to your own domain — otherwise every login is rejected.
    - `MCP_ALLOWED_HOSTNAMES` — comma-separated hostnames accepted by the MCP endpoints. Replace `plausible-mcp.sentry.dev` with your worker's hostname; keep the localhost entries if you use `wrangler dev`.
    - `MCP_ALLOWED_ORIGIN_HOSTNAMES` — comma-separated browser Origin hostnames allowed to call `/internal`. Non-browser clients do not send an `Origin` header.
@@ -150,7 +152,7 @@ The Worker runs **no OAuth server** — Cloudflare Access is the authorization s
 
 | Environment Variable | Required | Default | Description |
 |---------------------|----------|---------|-------------|
-| `PLAUSIBLE_API_KEY` | Yes (STDIO) | — | Your Plausible API key ([get one here](https://plausible.io/docs/stats-api)) |
+| `PLAUSIBLE_API_KEY` | Yes (STDIO; Worker `/internal`) | — | Your Plausible API key ([get one here](https://plausible.io/docs/stats-api)). On the Worker this is the shared key for `/internal`; `/mcp` takes each user's own key via Bearer. |
 | `PLAUSIBLE_BASE_URL` | No | `https://plausible.io` | URL of your Plausible instance (for self-hosted) |
 | `PLAUSIBLE_DEFAULT_SITE_ID` | No | — | Default site domain so you don't have to pass `site_id` every call |
 | `CF_ACCESS_TEAM_DOMAIN` | Yes (Worker `/internal`) | — | `https://<team>.cloudflareaccess.com` — verifies the `Cf-Access-Jwt-Assertion` JWKS + issuer. No trailing slash. |
@@ -225,14 +227,21 @@ OPENROUTER_MODEL=openai/gpt-5 OPENROUTER_API_KEY=sk-or-... pnpm eval  # try anot
 src/
 ├── index.ts              # STDIO entry point (local use)
 ├── worker.ts             # Cloudflare Worker entry point (remote)
+├── env.ts                # Worker environment bindings
+├── cf-access.ts          # Verifies the Cloudflare Access assertion on /internal
 ├── server.ts             # Creates McpServer, registers all tools
 ├── plausible.ts          # PlausibleClient — standalone API client
 ├── schemas.ts            # Shared Zod schemas and filter helpers
+├── errors.ts             # UserFacingError and tool-error reporting
+├── telemetry.ts          # Pure classifiers — route, MCP request kind, client family
+├── mcp-telemetry.ts      # Records MCP client info onto the active span
+├── redaction.ts          # Strips PII from Sentry events on the BYOK path
 └── tools/
     ├── get-timeseries.ts
     ├── get-breakdown.ts
     ├── get-conversions.ts
-    └── compare-periods.ts
+    ├── compare-periods.ts
+    └── send-feedback.ts
 ```
 
 `PlausibleClient` has zero MCP dependency and can be used standalone.
