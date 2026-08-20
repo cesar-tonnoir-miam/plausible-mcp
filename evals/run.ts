@@ -24,7 +24,12 @@ const openrouter = new OpenAI({
 async function getToolSchemas() {
   const server = createServer({
     apiKey: "eval-key",
-    defaultSiteId: "example.com",
+    context: {
+      allowedSites: ["example.com"],
+      rateLimiter: undefined,
+      callerFingerprint: "eval0000",
+      maxResponseBytes: 1_048_576,
+    },
   });
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();

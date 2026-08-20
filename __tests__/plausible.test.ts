@@ -16,6 +16,7 @@ function mockError(status: number, body: string) {
     ok: false,
     status,
     text: () => Promise.resolve(body),
+    headers: { get: () => null },
   });
 }
 
@@ -58,17 +59,45 @@ describe("PlausibleClient", () => {
     });
   });
 
-  it("encodes an absolute date range as the Plausible v2 tuple", async () => {
+  it("passes an absolute [start, end] date_range tuple through untouched", async () => {
     mockOk({ results: [], meta: {}, query: {} });
 
     await client.query({
       site_id: "example.com",
       metrics: ["visitors"],
-      date_range: "2026-07-01,2026-07-07",
+      date_range: ["2026-07-01", "2026-07-07"],
     });
 
     const body = JSON.parse(mockFetch.mock.calls[0][1].body);
     expect(body.date_range).toEqual(["2026-07-01", "2026-07-07"]);
+  });
+
+  it("includes order_by when provided", async () => {
+    mockOk({ results: [], meta: {}, query: {} });
+
+    await client.query({
+      site_id: "example.com",
+      metrics: ["visitors"],
+      date_range: "7d",
+      order_by: [["visitors", "desc"]],
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.order_by).toEqual([["visitors", "desc"]]);
+  });
+
+  it("includes include when provided", async () => {
+    mockOk({ results: [], meta: {}, query: {} });
+
+    await client.query({
+      site_id: "example.com",
+      metrics: ["visitors"],
+      date_range: "7d",
+      include: { total_rows: true },
+    });
+
+    const body = JSON.parse(mockFetch.mock.calls[0][1].body);
+    expect(body.include).toEqual({ total_rows: true });
   });
 
   it("includes dimensions when provided", async () => {
@@ -224,6 +253,23 @@ describe("PlausibleClient", () => {
         date_range: "7d",
       })
     ).rejects.toThrow(PlausibleApiError);
+  });
+
+  it("captures Retry-After on a 429 response", async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      status: 429,
+      text: () => Promise.resolve("Rate limit exceeded"),
+      headers: { get: (name: string) => (name === "Retry-After" ? "17" : null) },
+    });
+
+    try {
+      await client.query({ site_id: "example.com", metrics: ["visitors"], date_range: "7d" });
+      expect.unreachable();
+    } catch (e) {
+      expect(e).toBeInstanceOf(PlausibleApiError);
+      expect((e as PlausibleApiError).retryAfterSeconds).toBe(17);
+    }
   });
 
   it("throws PlausibleApiError on 500", async () => {

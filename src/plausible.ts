@@ -1,15 +1,17 @@
 export interface PlausibleQueryParams {
   site_id: string;
   metrics: string[];
-  date_range: string;
+  date_range: string | [string, string];
   dimensions?: string[];
   filters?: unknown[];
+  order_by?: unknown[];
+  include?: Record<string, unknown>;
   pagination?: { limit: number; offset?: number };
 }
 
 export interface PlausibleResult {
   dimensions: (string | number)[];
-  metrics: (number | null)[];
+  metrics: (number | string | null)[];
 }
 
 export interface PlausibleResponse {
@@ -21,7 +23,8 @@ export interface PlausibleResponse {
 export class PlausibleApiError extends Error {
   constructor(
     public readonly status: number,
-    public readonly body: string
+    public readonly body: string,
+    public readonly retryAfterSeconds?: number
   ) {
     super(`Plausible API error ${status}: ${body}`);
     this.name = "PlausibleApiError";
@@ -31,11 +34,6 @@ export class PlausibleApiError extends Error {
 export interface PlausibleClientConfig {
   apiKey: string;
   baseUrl?: string;
-}
-
-function encodeDateRange(dateRange: string): string | [string, string] {
-  const absoluteRange = /^(\d{4}-\d{2}-\d{2}),(\d{4}-\d{2}-\d{2})$/.exec(dateRange);
-  return absoluteRange ? [absoluteRange[1], absoluteRange[2]] : dateRange;
 }
 
 export class PlausibleClient {
@@ -61,17 +59,21 @@ export class PlausibleClient {
     const body: Record<string, unknown> = {
       site_id: params.site_id,
       metrics: params.metrics,
-      date_range: encodeDateRange(params.date_range),
+      date_range: params.date_range,
     };
 
     if (params.dimensions?.length) {
       body.dimensions = params.dimensions;
     }
-
     if (params.filters?.length) {
       body.filters = params.filters;
     }
-
+    if (params.order_by?.length) {
+      body.order_by = params.order_by;
+    }
+    if (params.include) {
+      body.include = params.include;
+    }
     if (params.pagination) {
       body.pagination = params.pagination;
     }
@@ -87,7 +89,13 @@ export class PlausibleClient {
 
     if (!response.ok) {
       const text = await response.text();
-      throw new PlausibleApiError(response.status, text);
+      const retryAfterHeader = response.headers.get("Retry-After");
+      const retryAfterSeconds = retryAfterHeader ? Number(retryAfterHeader) : undefined;
+      throw new PlausibleApiError(
+        response.status,
+        text,
+        Number.isFinite(retryAfterSeconds) ? retryAfterSeconds : undefined
+      );
     }
 
     return (await response.json()) as PlausibleResponse;

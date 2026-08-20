@@ -3,10 +3,4 @@ dist/
 coverage/
 .env
 .env.local
-.dev.vars
 *.tsbuildinfo
-.sentry-build/
-.wrangler/
-
-# Sentry Config File
-.sentryclirc

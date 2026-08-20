@@ -1,0 +1,11 @@
+node_modules
+dist
+__tests__
+evals
+.git
+.github
+*.md
+.env
+.env.local
+.env.example
+coverage

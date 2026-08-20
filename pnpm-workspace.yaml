@@ -1,20 +1,17 @@
-# esbuild (tsx + vitest), @sentry/cli, and Wrangler's workerd runtime need
-# post-install scripts to fetch platform binaries; pnpm blocks them by default.
+# esbuild (tsx + vitest) needs a post-install script to fetch its platform binary;
+# pnpm blocks that by default.
 onlyBuiltDependencies:
-  - "@sentry/cli"
   - esbuild
-  - workerd
 allowBuilds:
-  "@sentry/cli": true
   esbuild: true
   core-js-pure: false
-  workerd: true
 
-# Force esbuild (transitive via tsx + vitest) to the patched 0.28.1 — earlier
-# versions have a high-severity advisory (GHSA-gv7w-rqvm-qjhr).
 overrides:
+  # Force esbuild (transitive via tsx + vitest) to the patched 0.28.1 — earlier
+  # versions have a high-severity advisory (GHSA-gv7w-rqvm-qjhr).
   esbuild: ">=0.28.1"
-  # No patched 1.x exists for the @hono/node-server serve-static advisory and the
-  # MCP SDK pins ^1.x. None of our transports load the Node server (the Worker uses
-  # the web-standard transport, STDIO uses stdio), so the 2.x jump is inert here.
+  # @modelcontextprotocol/node (the Node HTTP entry, src/http-server.ts) pins
+  # @hono/node-server ^1.19.9, which has no patched 1.x for a serve-static advisory.
+  # This override forces the patched 2.x line instead — actively load-bearing, unlike
+  # a Cloudflare-Worker-era version of this override that predates this fork.
   "@hono/node-server": "^2.0.5"

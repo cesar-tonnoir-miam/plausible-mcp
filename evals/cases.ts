@@ -5,31 +5,26 @@ export interface EvalCase {
   assertions: (args: Record<string, unknown>) => string[];
 }
 
+function filtersInclude(
+  filters: unknown,
+  predicate: (clause: unknown[]) => boolean
+): boolean {
+  return Array.isArray(filters) && filters.some((f) => Array.isArray(f) && predicate(f));
+}
+
 export const cases: EvalCase[] = [
-  {
-    name: "before/after deploy comparison",
-    prompt:
-      "Did traffic to /pricing drop after March 15, 2024? Compare the week before and after.",
-    expectedTool: "compare_periods",
-    assertions: (args) => {
-      const errors: string[] = [];
-      if (!String(args.page ?? "").includes("/pricing")) {
-        errors.push(`Expected page to include "/pricing", got "${args.page}"`);
-      }
-      if (!args.period_a || !args.period_b) {
-        errors.push("Expected both period_a and period_b to be set");
-      }
-      return errors;
-    },
-  },
   {
     name: "daily visitors timeseries",
     prompt: "Show me daily visitors for example.com for the last 30 days.",
-    expectedTool: "get_timeseries",
+    expectedTool: "plausible_query",
     assertions: (args) => {
       const errors: string[] = [];
-      if (args.date_range !== "30d" && !String(args.date_range).includes(",")) {
-        errors.push(`Expected date_range "30d" or date pair, got "${args.date_range}"`);
+      const dimensions = args.dimensions as string[] | undefined;
+      if (!dimensions?.some((d) => d.startsWith("time:"))) {
+        errors.push(`Expected a time:* dimension, got ${JSON.stringify(dimensions)}`);
+      }
+      if (args.date_range !== "30d" && !Array.isArray(args.date_range)) {
+        errors.push(`Expected date_range "30d" or a [start, end] pair, got "${args.date_range}"`);
       }
       return errors;
     },
@@ -37,101 +32,77 @@ export const cases: EvalCase[] = [
   {
     name: "top pages breakdown",
     prompt: "What are our top pages by traffic this month for example.com?",
-    expectedTool: "get_breakdown",
+    expectedTool: "plausible_query",
     assertions: (args) => {
       const errors: string[] = [];
-      if (args.dimension !== "event:page") {
-        errors.push(
-          `Expected dimension "event:page", got "${args.dimension}"`
-        );
+      const dimensions = args.dimensions as string[] | undefined;
+      if (!dimensions?.includes("event:page")) {
+        errors.push(`Expected dimensions to include "event:page", got ${JSON.stringify(dimensions)}`);
       }
       return errors;
     },
   },
   {
-    name: "conversion rate query",
-    prompt:
-      "What's the signup conversion rate on /pricing for example.com this month?",
-    expectedTool: "get_conversions",
+    name: "conversion rate for a goal on a specific page",
+    prompt: "What's the signup conversion rate on /pricing for example.com this month?",
+    expectedTool: "plausible_query",
     assertions: (args) => {
       const errors: string[] = [];
-      const goal = String(args.goal ?? "").toLowerCase();
-      if (!goal.includes("signup")) {
-        errors.push(`Expected goal to contain "signup", got "${args.goal}"`);
+      const filters = args.filters;
+      if (
+        !filtersInclude(
+          filters,
+          (f) => f[1] === "event:goal" && JSON.stringify(f).toLowerCase().includes("signup")
+        )
+      ) {
+        errors.push(`Expected a filter targeting event:goal for Signup, got ${JSON.stringify(filters)}`);
       }
-      if (!String(args.page ?? "").includes("/pricing")) {
-        errors.push(`Expected page to include "/pricing", got "${args.page}"`);
-      }
-      return errors;
-    },
-  },
-  {
-    name: "bounce rate week-over-week comparison",
-    prompt:
-      "How does this week's bounce rate compare to last week for /blog on example.com?",
-    expectedTool: "compare_periods",
-    assertions: (args) => {
-      const errors: string[] = [];
-      if (!String(args.page ?? "").includes("/blog")) {
-        errors.push(`Expected page to include "/blog", got "${args.page}"`);
-      }
-      const metrics = args.metrics as string[] | undefined;
-      if (metrics && !metrics.includes("bounce_rate")) {
-        errors.push(
-          `Expected metrics to include "bounce_rate", got ${JSON.stringify(metrics)}`
-        );
+      if (!filtersInclude(filters, (f) => f[1] === "event:page")) {
+        errors.push(`Expected a filter targeting event:page, got ${JSON.stringify(filters)}`);
       }
       return errors;
     },
   },
   {
     name: "traffic by country (human-readable names)",
-    prompt:
-      "Which countries send the most visitors to example.com this month? Show country names.",
-    expectedTool: "get_breakdown",
+    prompt: "Which countries send the most visitors to example.com this month? Show country names.",
+    expectedTool: "plausible_query",
     assertions: (args) => {
       const errors: string[] = [];
-      const dimension = String(args.dimension ?? "");
-      if (dimension !== "visit:country_name" && dimension !== "visit:country") {
-        errors.push(
-          `Expected dimension "visit:country_name" (or "visit:country"), got "${dimension}"`
-        );
+      const dimensions = args.dimensions as string[] | undefined;
+      if (!dimensions?.includes("visit:country_name") && !dimensions?.includes("visit:country")) {
+        errors.push(`Expected visit:country_name (or visit:country), got ${JSON.stringify(dimensions)}`);
       }
       return errors;
     },
   },
   {
     name: "breakdown by a custom property",
-    prompt:
-      "Break down visitors by the custom property `destination_host` for example.com this month.",
-    expectedTool: "get_breakdown",
+    prompt: "Break down visitors by the custom property `destination_host` for example.com this month.",
+    expectedTool: "plausible_query",
     assertions: (args) => {
       const errors: string[] = [];
-      if (args.dimension !== "event:props:destination_host") {
-        errors.push(
-          `Expected dimension "event:props:destination_host", got "${args.dimension}"`
-        );
+      const dimensions = args.dimensions as string[] | undefined;
+      if (!dimensions?.includes("event:props:destination_host")) {
+        errors.push(`Expected dimensions to include "event:props:destination_host", got ${JSON.stringify(dimensions)}`);
       }
       return errors;
     },
   },
   {
-    name: "filter timeseries by a custom property value",
+    name: "filter by a custom property value",
     prompt:
       "Show daily visitors to example.com over the last 30 days, but only for events where the custom property `plan` is `pro`.",
-    expectedTool: "get_timeseries",
+    expectedTool: "plausible_query",
     assertions: (args) => {
       const errors: string[] = [];
-      const filters = args.property_filters as
-        | Array<{ property?: string; values?: string[] }>
-        | undefined;
-      const match = filters?.find(
-        (f) => f.property === "plan" && (f.values ?? []).includes("pro")
-      );
-      if (!match) {
-        errors.push(
-          `Expected a property_filters entry for plan=pro, got ${JSON.stringify(args.property_filters)}`
-        );
+      if (
+        !filtersInclude(
+          args.filters,
+          (f) => f[1] === "event:props:plan" && JSON.stringify(f[2]).includes("pro")
+        )
+      ) {
+        errors.push(`Expected a filter for event:props:plan = pro, got ${JSON.stringify(args.filters)}`);
       }
       return errors;
     },
@@ -140,24 +111,56 @@ export const cases: EvalCase[] = [
     name: "breakdown filtered by a visit-level dimension",
     prompt:
       "What are the top pages on example.com this month for visitors who arrived via the Organic Search channel?",
-    expectedTool: "get_breakdown",
+    expectedTool: "plausible_query",
     assertions: (args) => {
       const errors: string[] = [];
-      if (args.dimension !== "event:page") {
-        errors.push(`Expected dimension "event:page", got "${args.dimension}"`);
+      const dimensions = args.dimensions as string[] | undefined;
+      if (!dimensions?.includes("event:page")) {
+        errors.push(`Expected dimensions to include "event:page", got ${JSON.stringify(dimensions)}`);
       }
-      const filters = args.property_filters as
-        | Array<{ property?: string; values?: string[] }>
-        | undefined;
-      const match = filters?.find(
-        (f) =>
-          f.property === "visit:channel" &&
-          (f.values ?? []).includes("Organic Search")
-      );
-      if (!match) {
+      if (
+        !filtersInclude(
+          args.filters,
+          (f) => f[1] === "visit:channel" && JSON.stringify(f[2]).includes("Organic Search")
+        )
+      ) {
+        errors.push(`Expected a filter for visit:channel = Organic Search, got ${JSON.stringify(args.filters)}`);
+      }
+      return errors;
+    },
+  },
+  {
+    name: "exclusion filter (the fork's raison d'être)",
+    prompt:
+      "For example.com, show visitor counts by page name, but exclude anything under /admin or /internal-tools.",
+    expectedTool: "plausible_query",
+    assertions: (args) => {
+      const errors: string[] = [];
+      if (
+        !filtersInclude(
+          args.filters,
+          (f) => (f[0] === "matches_not" || f[0] === "contains_not") && f[1] === "event:page"
+        )
+      ) {
         errors.push(
-          `Expected a property_filters entry for visit:channel=Organic Search, got ${JSON.stringify(args.property_filters)}`
+          `Expected an exclusion filter (matches_not/contains_not) on event:page, got ${JSON.stringify(args.filters)}`
         );
+      }
+      return errors;
+    },
+  },
+  {
+    name: "exhaustive breakdown for a high-cardinality numeric property",
+    prompt:
+      "I need the exact total revenue for example.com this month, summed from the `total_amount` custom property on every payment.confirmed event — don't give me an approximation, I need every row accounted for.",
+    expectedTool: "plausible_breakdown_exhaustive",
+    assertions: (args) => {
+      const errors: string[] = [];
+      if (args.dimension !== "event:props:total_amount") {
+        errors.push(`Expected dimension "event:props:total_amount", got "${args.dimension}"`);
+      }
+      if (args.sum_numeric_dimension !== true) {
+        errors.push("Expected sum_numeric_dimension: true for an exact total");
       }
       return errors;
     },

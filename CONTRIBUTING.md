@@ -5,7 +5,7 @@ Thanks for your interest in contributing!
 ## Development Setup
 
 ```bash
-git clone https://github.com/getsentry/plausible-mcp.git
+git clone <this repository>
 cd plausible-mcp
 pnpm install
 ```
@@ -22,12 +22,26 @@ Tests use [Vitest](https://vitest.dev) with mocked `fetch` — no Plausible acco
 
 ## Adding a New Tool
 
-1. Create `src/tools/your-tool.ts`, starting from the closest existing tool. A tool that queries Plausible exports `register(server, client, defaultSiteId?)` — copy `get-timeseries.ts`. A tool that does not needs no client, so it exports `register(server)` — copy `send-feedback.ts`.
-2. Declare an `outputSchema` and return `structuredContent` alongside the text block. Every tool does this; query-shaped results reuse `queryResultOutputSchema` and `buildQueryStructuredContent` from `src/schemas.ts`.
-3. Set `annotations` to describe what the tool really does. The query tools are read-only; `send_feedback` writes to Sentry, so it sets `readOnlyHint: false`.
-4. Register it in `src/server.ts`
-5. Add tests in `__tests__/tools/your-tool.test.ts`
-6. Add an eval case in `evals/cases.ts`. Evals grade whether a model picks the right tool from a plain-language prompt, so this applies to tools a user would ask for in words — `send_feedback` has none.
+This fork intentionally exposes exactly two tools (`plausible_query`,
+`plausible_breakdown_exhaustive`) — see the spec this fork was built from for why a wider
+surface (shortcut params that compile to different filter semantics) is a correctness risk,
+not a convenience. Before adding a third tool, make sure it can't be expressed as a call to
+one of the existing two.
+
+If you do add one:
+
+1. Create `src/tools/your-tool.ts`, exporting `register(server, client, context)` — copy
+   `src/tools/query.ts`. `context: ToolContext` (`src/tool-context.ts`) carries the allowlist,
+   rate limiter, caller fingerprint, and response size budget; every tool handler needs it.
+2. Declare an `outputSchema` and return `structuredContent` alongside the text block. Field
+   names in `structuredContent` are a contract with the `stats-enseignes` skill (see spec
+   §8) — don't rename one without updating the skill in the same change.
+3. Call `assertSiteAllowed`, `validateFilters`, and the rate limiter the same way `query.ts`
+   does — these aren't optional per-tool choices, they're the security model.
+4. Register it in `src/server.ts`.
+5. Add tests in `__tests__/tools/your-tool.test.ts`.
+6. Add an eval case in `evals/cases.ts` if the tool is one a user would ask for in plain
+   language.
 
 ## Running LLM Evals
 
@@ -70,4 +84,5 @@ Releases are automated with [craft](https://github.com/getsentry/craft). **Don't
 2. A maintainer runs the **Release** workflow (Actions → Release → *Run workflow*) and selects the bump type (`patch` / `minor` / `major`).
 3. craft cuts a `release/X.Y.Z` branch, then publishes a git tag and GitHub release once CI is green.
 
-Deploying the Cloudflare Worker (`pnpm deploy`) is separate from cutting a release.
+Deploying to Cloud Run (`pnpm docker:build`, then `gcloud run deploy` — see README
+"Self-Hosting") is separate from cutting a release.

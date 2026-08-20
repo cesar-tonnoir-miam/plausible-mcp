@@ -6,8 +6,8 @@ import {
 } from "@modelcontextprotocol/client";
 import { createMcpHandler } from "@modelcontextprotocol/server";
 import { createServer } from "../src/server.js";
+import type { ToolContext } from "../src/tool-context.js";
 
-// Mock fetch globally for all Plausible API calls
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
@@ -17,12 +17,22 @@ function mockPlausibleOk(data?: unknown) {
     json: () =>
       Promise.resolve(
         data ?? {
-          results: [{ dimensions: ["2024-01-15"], metrics: [500, 1200, 32.1, 95] }],
+          results: [{ dimensions: ["2024-01-15"], metrics: [500] }],
           meta: {},
           query: {},
         }
       ),
   });
+}
+
+function testContext(overrides: Partial<ToolContext> = {}): ToolContext {
+  return {
+    allowedSites: ["example.com"],
+    rateLimiter: undefined,
+    callerFingerprint: "abcd1234",
+    maxResponseBytes: 1_048_576,
+    ...overrides,
+  };
 }
 
 describe("MCP Server Integration", () => {
@@ -32,11 +42,10 @@ describe("MCP Server Integration", () => {
     const server = createServer({
       apiKey: "test-key-123",
       baseUrl: "https://plausible.io",
-      defaultSiteId: "example.com",
+      context: testContext(),
     });
 
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-
     await server.connect(serverTransport);
 
     client = new Client({ name: "test-client", version: "0.0.1" });
@@ -47,15 +56,10 @@ describe("MCP Server Integration", () => {
     await client.close();
   });
 
-  it("lists all 4 tools", async () => {
+  it("exposes exactly the two contracted tools (spec §8)", async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual([
-      "compare_periods",
-      "get_breakdown",
-      "get_conversions",
-      "get_timeseries",
-    ]);
+    expect(names).toEqual(["plausible_breakdown_exhaustive", "plausible_query"]);
   });
 
   it("each tool has a description and input schema", async () => {
@@ -77,222 +81,126 @@ describe("MCP Server Integration", () => {
     }
   });
 
+  it("plausible_query's output schema declares the exact contracted field names (spec §8)", async () => {
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === "plausible_query")!;
+    const properties = Object.keys(
+      (tool.outputSchema as { properties: Record<string, unknown> }).properties
+    );
+    expect(properties.sort()).toEqual(
+      [
+        "site_id",
+        "date_range_resolved",
+        "metrics",
+        "dimensions",
+        "filters_sent",
+        "rows",
+        "row_count",
+        "truncated",
+        "warnings",
+      ].sort()
+    );
+  });
+
+  it("plausible_breakdown_exhaustive's output schema declares the exact contracted field names (spec §8)", async () => {
+    const { tools } = await client.listTools();
+    const tool = tools.find((t) => t.name === "plausible_breakdown_exhaustive")!;
+    const properties = Object.keys(
+      (tool.outputSchema as { properties: Record<string, unknown> }).properties
+    );
+    expect(properties.sort()).toEqual(
+      [
+        "site_id",
+        "date_range_resolved",
+        "dimension",
+        "filters_sent",
+        "pages_fetched",
+        "row_count",
+        "complete",
+        "sum",
+        "sum_metric",
+        "non_numeric_rows_skipped",
+        "rows",
+        "warnings",
+      ].sort()
+    );
+  });
+
   it("exposes server instructions documenting the API constraints", () => {
     const instructions = client.getInstructions();
     expect(instructions).toBeTruthy();
-    expect(instructions).toContain("date_range");
-    expect(instructions).toContain("Session metrics");
-    expect(instructions).toContain("event:props:<name>");
+    expect(instructions).toContain("date_range_resolved");
+    expect(instructions).toContain("truncated");
+    expect(instructions).toContain("complete");
   });
 
-  it("returns structuredContent alongside the text block", async () => {
+  it("plausible_query returns structuredContent alongside the text block", async () => {
     mockPlausibleOk();
 
     const result = await client.callTool({
-      name: "get_breakdown",
+      name: "plausible_query",
       arguments: {
         site_id: "example.com",
         date_range: "30d",
-        dimension: "visit:country_name",
+        metrics: ["visitors"],
+        dimensions: ["visit:country_name"],
       },
     });
 
     expect(result.isError).toBeFalsy();
-    const structured = result.structuredContent as {
-      metrics: string[];
-      dimensions: string[];
-      results: unknown[];
-    };
+    const structured = result.structuredContent as { dimensions: string[]; site_id: string };
     expect(structured.dimensions).toEqual(["visit:country_name"]);
-    expect(structured.metrics).toEqual(["visitors", "pageviews", "bounce_rate"]);
-    expect(Array.isArray(structured.results)).toBe(true);
+    expect(structured.site_id).toBe("example.com");
   });
 
-  it("get_timeseries returns data", async () => {
+  it("plausible_breakdown_exhaustive returns data", async () => {
     mockPlausibleOk();
 
     const result = await client.callTool({
-      name: "get_timeseries",
-      arguments: { site_id: "example.com", date_range: "30d" },
-    });
-
-    expect(result.isError).toBeFalsy();
-    const content = result.content as Array<{ type: string; text: string }>;
-    expect(content).toHaveLength(1);
-    const parsed = JSON.parse(content[0].text);
-    expect(parsed.results).toBeDefined();
-  });
-
-  it("get_breakdown returns data", async () => {
-    mockPlausibleOk();
-
-    const result = await client.callTool({
-      name: "get_breakdown",
+      name: "plausible_breakdown_exhaustive",
       arguments: {
         site_id: "example.com",
         date_range: "30d",
+        metrics: ["visitors"],
         dimension: "event:page",
       },
     });
 
     expect(result.isError).toBeFalsy();
-    const content = result.content as Array<{ type: string; text: string }>;
-    const parsed = JSON.parse(content[0].text);
-    expect(parsed.results).toBeDefined();
   });
 
-  it("get_conversions returns data", async () => {
-    mockPlausibleOk();
-
+  it("site_id is always required (no default-site fallback in this fork)", async () => {
     const result = await client.callTool({
-      name: "get_conversions",
-      arguments: { site_id: "example.com", date_range: "30d" },
+      name: "plausible_query",
+      arguments: { date_range: "30d", metrics: ["visitors"] },
     });
-
-    expect(result.isError).toBeFalsy();
+    expect(result.isError).toBe(true);
   });
 
-  it("compare_periods returns comparison with deltas", async () => {
-    mockFetch
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            results: [{ dimensions: [], metrics: [100, 200, 45, 120] }],
-            meta: {},
-            query: {},
-          }),
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: () =>
-          Promise.resolve({
-            results: [{ dimensions: [], metrics: [150, 180, 40, 130] }],
-            meta: {},
-            query: {},
-          }),
-      });
-
-    const result = await client.callTool({
-      name: "compare_periods",
-      arguments: {
-        site_id: "example.com",
-        period_a: "2024-01-01,2024-01-07",
-        period_b: "2024-01-08,2024-01-14",
-      },
-    });
-
-    expect(result.isError).toBeFalsy();
-    const content = result.content as Array<{ type: string; text: string }>;
-    const parsed = JSON.parse(content[0].text);
-    expect(parsed.period_a).toBeDefined();
-    expect(parsed.period_b).toBeDefined();
-    expect(parsed.deltas).toBeDefined();
-    expect(parsed.deltas.visitors.absolute).toBe(50);
-  });
-
-  it("uses default site_id when not provided", async () => {
-    mockPlausibleOk();
-
-    const result = await client.callTool({
-      name: "get_timeseries",
-      arguments: { date_range: "7d" },
-    });
-
-    expect(result.isError).toBeFalsy();
-    // Verify the API was called with default site
-    const body = JSON.parse(mockFetch.mock.lastCall[1].body);
-    expect(body.site_id).toBe("example.com");
-  });
-
-  it("does not register send_feedback by default", async () => {
-    const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).not.toContain("send_feedback");
-  });
-
-  it("returns error when Plausible API fails", async () => {
+  it("returns a structured error when the Plausible API fails", async () => {
     mockFetch.mockResolvedValueOnce({
       ok: false,
       status: 401,
       text: () => Promise.resolve("Invalid API key"),
+      headers: { get: () => null },
     });
 
     const result = await client.callTool({
-      name: "get_timeseries",
-      arguments: { site_id: "example.com", date_range: "7d" },
+      name: "plausible_query",
+      arguments: { site_id: "example.com", date_range: "30d", metrics: ["visitors"] },
     });
 
     expect(result.isError).toBe(true);
     const content = result.content as Array<{ type: string; text: string }>;
-    expect(content[0].text).toContain("401");
-  });
-});
-
-describe("MCP Server with feedback tool enabled", () => {
-  let client: Client;
-
-  beforeAll(async () => {
-    const server = createServer({
-      apiKey: "test-key-123",
-      defaultSiteId: "example.com",
-      enableFeedbackTool: true,
-    });
-
-    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-    await server.connect(serverTransport);
-
-    client = new Client({ name: "test-client", version: "0.0.1" });
-    await client.connect(clientTransport);
-  });
-
-  afterAll(async () => {
-    await client.close();
-  });
-
-  it("registers send_feedback alongside the query tools", async () => {
-    const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name)).toContain("send_feedback");
-  });
-
-  it("mentions send_feedback in the server instructions", () => {
-    expect(client.getInstructions()).toContain("send_feedback");
-  });
-
-  it("records feedback and returns structured confirmation", async () => {
-    const result = await client.callTool({
-      name: "send_feedback",
-      arguments: {
-        message: "The combination-rules error message could name the offending metric",
-        category: "confusing_error",
-      },
-    });
-
-    expect(result.isError).toBeFalsy();
-    const structured = result.structuredContent as {
-      recorded: boolean;
-      feedback_id?: string;
-    };
-    expect(structured.recorded).toBe(true);
-    // Uses the real (unmocked) Sentry withScope/captureFeedback: proves withScope
-    // propagates the callback's return value, so the feedback id is not lost.
-    expect(structured.feedback_id).toMatch(/^[0-9a-f]{32}$/);
-  });
-
-  it("rejects messages that are too short to act on", async () => {
-    const result = await client.callTool({
-      name: "send_feedback",
-      arguments: { message: "bad" },
-    });
-
-    expect(result.isError).toBe(true);
+    const payload = JSON.parse(content[0].text);
+    expect(payload.error).toBe("plausible_unauthorized");
   });
 });
 
 describe("MCP HTTP protocol eras", () => {
-  const handler = createMcpHandler(() => createServer({
-    apiKey: "test-key-123",
-    defaultSiteId: "example.com",
-  }));
+  const handler = createMcpHandler(() =>
+    createServer({ apiKey: "test-key-123", context: testContext() })
+  );
 
   afterAll(async () => {
     await handler.close();
@@ -300,19 +208,16 @@ describe("MCP HTTP protocol eras", () => {
 
   it("serves the 2026-07-28 era through server/discover", async () => {
     const methods: Array<string | null> = [];
-    const transport = new StreamableHTTPClientTransport(
-      new URL("https://test.local/mcp"),
-      {
-        fetch: (url, init) => {
-          const request = new Request(url, init);
-          methods.push(request.headers.get("Mcp-Method"));
-          return handler.fetch(request);
-        },
+    const transport = new StreamableHTTPClientTransport(new URL("https://test.local/mcp"), {
+      fetch: (url, init) => {
+        const request = new Request(url, init);
+        methods.push(request.headers.get("Mcp-Method"));
+        return handler.fetch(request);
       },
-    );
+    });
     const modernClient = new Client(
       { name: "modern-test-client", version: "0.0.1" },
-      { versionNegotiation: { mode: { pin: "2026-07-28" } } },
+      { versionNegotiation: { mode: { pin: "2026-07-28" } } }
     );
 
     try {
@@ -320,24 +225,11 @@ describe("MCP HTTP protocol eras", () => {
       expect(modernClient.getProtocolEra()).toBe("modern");
       expect(methods).toContain("server/discover");
 
-      const discover = modernClient.getDiscoverResult() as unknown as {
-        ttlMs: number;
-        cacheScope: string;
-      };
-      expect(discover.ttlMs).toBe(60 * 60 * 1000);
-      expect(discover.cacheScope).toBe("public");
-
       const toolList = await modernClient.listTools();
       expect(methods).toContain("tools/list");
-      expect((toolList as unknown as { ttlMs: number }).ttlMs)
-        .toBe(60 * 60 * 1000);
-      expect((toolList as unknown as { cacheScope: string }).cacheScope)
-        .toBe("public");
-      expect(toolList.tools.map((tool) => tool.name)).toEqual([
-        "get_timeseries",
-        "get_breakdown",
-        "get_conversions",
-        "compare_periods",
+      expect(toolList.tools.map((tool) => tool.name).sort()).toEqual([
+        "plausible_breakdown_exhaustive",
+        "plausible_query",
       ]);
     } finally {
       await modernClient.close();
@@ -345,17 +237,16 @@ describe("MCP HTTP protocol eras", () => {
   });
 
   it("keeps serving legacy clients from the same handler", async () => {
-    const transport = new StreamableHTTPClientTransport(
-      new URL("https://test.local/mcp"),
-      { fetch: (url, init) => handler.fetch(new Request(url, init)) },
-    );
+    const transport = new StreamableHTTPClientTransport(new URL("https://test.local/mcp"), {
+      fetch: (url, init) => handler.fetch(new Request(url, init)),
+    });
     const legacyClient = new Client({ name: "legacy-test-client", version: "0.0.1" });
 
     try {
       await legacyClient.connect(transport);
       expect(legacyClient.getProtocolEra()).toBe("legacy");
       const { tools } = await legacyClient.listTools();
-      expect(tools).toHaveLength(4);
+      expect(tools).toHaveLength(2);
     } finally {
       await legacyClient.close();
     }
